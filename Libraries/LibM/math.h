@@ -31,12 +31,16 @@
 __BEGIN_DECLS
 
 #define HUGE_VAL 1e10000
+#define INFINITY __builtin_huge_val()
+#define NAN __builtin_nan("")
 #define M_E 2.718281828459045
 #define M_PI 3.141592653589793
 #define M_PI_2 (M_PI / 2)
 #define M_TAU (M_PI * 2)
 #define M_LN2 0.69314718055995
 #define M_LN10 2.30258509299405
+#define M_SQRT2 1.4142135623730951
+#define M_SQRT1_2 0.7071067811865475
 
 double acos(double);
 float acosf(float);
@@ -70,6 +74,8 @@ double fmod(double, double);
 float fmodf(float, float);
 double exp(double);
 float expf(float);
+double exp2(double);
+float exp2f(float);
 double frexp(double, int* exp);
 float frexpf(float, int* exp);
 double log(double);

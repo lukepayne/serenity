@@ -25,6 +25,8 @@
  */
 
 #include "VariablesModel.h"
+#include <LibGUI/Application.h>
+#include <LibGUI/MessageBox.h>
 
 GUI::ModelIndex VariablesModel::index(int row, int column, const GUI::ModelIndex& parent_index) const
 {
@@ -73,19 +75,89 @@ String variable_value_as_string(const DebugInfo::VariableInfo& variable)
 
     auto variable_address = variable.location_data.address;
 
-    if (variable.type == "int") {
+    if (variable.is_enum_type()) {
+        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        ASSERT(value.has_value());
+        auto it = variable.type->members.find([enumerator_value = value.value()](auto& enumerator) {
+            return enumerator->constant_data.as_u32 == enumerator_value;
+        });
+        ASSERT(!it.is_end());
+        return String::format("%s::%s", variable.type_name.characters(), (*it)->name.characters());
+    }
+
+    if (variable.type_name == "int") {
         auto value = Debugger::the().session()->peek((u32*)variable_address);
         ASSERT(value.has_value());
         return String::format("%d", static_cast<int>(value.value()));
     }
 
-    if (variable.type == "char") {
+    if (variable.type_name == "char") {
         auto value = Debugger::the().session()->peek((u32*)variable_address);
         ASSERT(value.has_value());
         return String::format("'%c' (%d)", static_cast<char>(value.value()), static_cast<char>(value.value()));
     }
 
-    return String::format("type: %s @ %08x, ", variable.type.characters(), variable_address);
+    if (variable.type_name == "bool") {
+        auto value = Debugger::the().session()->peek((u32*)variable_address);
+        ASSERT(value.has_value());
+        return (value.value() & 1) ? "true" : "false";
+    }
+
+    return String::format("type: %s @ %08x, ", variable.type_name.characters(), variable_address);
+}
+
+static Optional<u32> string_to_variable_value(const StringView& string_value, const DebugInfo::VariableInfo& variable)
+{
+    if (variable.is_enum_type()) {
+        auto prefix_string = String::format("%s::", variable.type_name.characters());
+        auto string_to_use = string_value;
+        if (string_value.starts_with(prefix_string))
+            string_to_use = string_value.substring_view(prefix_string.length(), string_value.length() - prefix_string.length());
+
+        auto it = variable.type->members.find([string_to_use](auto& enumerator) {
+            return enumerator->name == string_to_use;
+        });
+
+        if (it.is_end())
+            return {};
+        return (*it)->constant_data.as_u32;
+    }
+
+    if (variable.type_name == "int") {
+        bool success = false;
+        auto value = string_value.to_int(success);
+        return success ? value : Optional<u32>();
+    }
+
+    if (variable.type_name == "bool") {
+        if (string_value == "true")
+            return true;
+        if (string_value == "false")
+            return false;
+        return {};
+    }
+
+    return {};
+}
+
+void VariablesModel::set_variable_value(const GUI::ModelIndex& index, const StringView& string_value, GUI::Window* parent_window)
+{
+    auto variable = static_cast<const DebugInfo::VariableInfo*>(index.internal_data());
+
+    auto value = string_to_variable_value(string_value, *variable);
+
+    if (value.has_value()) {
+        auto success = Debugger::the().session()->poke((u32*)variable->location_data.address, value.value());
+        ASSERT(success);
+        return;
+    }
+
+    GUI::MessageBox::show(
+        String::format("String value \"%s\" could not be converted to a value of type %s.", string_value.to_string().characters(), variable->type_name.characters()),
+        "Set value failed",
+        GUI::MessageBox::Type::Error,
+        GUI::MessageBox::InputType::OK,
+        parent_window);
 }
 
 GUI::Variant VariablesModel::data(const GUI::ModelIndex& index, Role role) const

@@ -29,7 +29,7 @@
 #include <AK/RefCounted.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
-#include <LibBareMetal/Memory/PhysicalAddress.h>
+#include <Kernel/PhysicalAddress.h>
 
 namespace Kernel {
 
@@ -290,6 +290,14 @@ struct [[gnu::packed]] IOAPIC
     u32 gsi_base;
 };
 
+struct [[gnu::packed]] ProcessorLocalAPIC
+{
+    MADTEntryHeader h;
+    u8 acpi_processor_id;
+    u8 apic_id;
+    u32 flags;
+};
+
 struct [[gnu::packed]] InterruptSourceOverride
 {
     MADTEntryHeader h;
@@ -336,8 +344,10 @@ class DynamicParser;
 class Parser;
 
 namespace StaticParsing {
-PhysicalAddress find_rsdp();
+Optional<PhysicalAddress> find_rsdp();
 PhysicalAddress find_table(PhysicalAddress rsdp, const StringView& signature);
-};
 }
+
+}
+
 }

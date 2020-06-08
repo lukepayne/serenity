@@ -38,12 +38,14 @@ public:
 
     const Document& node() const { return static_cast<const Document&>(*LayoutNode::node()); }
     virtual const char* class_name() const override { return "LayoutDocument"; }
-    virtual void layout() override;
+    virtual void layout(LayoutMode = LayoutMode::Default) override;
 
     const LayoutRange& selection() const { return m_selection; }
     LayoutRange& selection() { return m_selection; }
 
     void did_set_viewport_rect(Badge<Frame>, const Gfx::Rect&);
+
+    virtual bool is_root() const override { return true; }
 
 private:
     LayoutRange m_selection;

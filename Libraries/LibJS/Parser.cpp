@@ -29,7 +29,6 @@
 #include <AK/HashMap.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StdLibExtras.h>
-#include <stdio.h>
 
 namespace JS {
 
@@ -38,6 +37,7 @@ public:
     enum Type {
         Var = 1,
         Let = 2,
+        Function = 3,
     };
 
     ScopePusher(Parser& parser, unsigned mask)
@@ -48,6 +48,8 @@ public:
             m_parser.m_parser_state.m_var_scopes.append(NonnullRefPtrVector<VariableDeclaration>());
         if (m_mask & Let)
             m_parser.m_parser_state.m_let_scopes.append(NonnullRefPtrVector<VariableDeclaration>());
+        if (m_mask & Function)
+            m_parser.m_parser_state.m_function_scopes.append(NonnullRefPtrVector<FunctionDeclaration>());
     }
 
     ~ScopePusher()
@@ -56,6 +58,8 @@ public:
             m_parser.m_parser_state.m_var_scopes.take_last();
         if (m_mask & Let)
             m_parser.m_parser_state.m_let_scopes.take_last();
+        if (m_mask & Function)
+            m_parser.m_parser_state.m_function_scopes.take_last();
     }
 
     Parser& m_parser;
@@ -205,19 +209,34 @@ Associativity Parser::operator_associativity(TokenType type) const
 
 NonnullRefPtr<Program> Parser::parse_program()
 {
-    ScopePusher scope(*this, ScopePusher::Var | ScopePusher::Let);
+    ScopePusher scope(*this, ScopePusher::Var | ScopePusher::Let | ScopePusher::Function);
     auto program = adopt(*new Program);
+
+    bool first = true;
+    m_parser_state.m_use_strict_directive = UseStrictDirectiveState::Looking;
     while (!done()) {
         if (match_statement()) {
             program->append(parse_statement());
+            if (first) {
+                if (m_parser_state.m_use_strict_directive == UseStrictDirectiveState::Found) {
+                    program->set_strict_mode();
+                    m_parser_state.m_strict_mode = true;
+                }
+                first = false;
+                m_parser_state.m_use_strict_directive = UseStrictDirectiveState::None;
+            }
         } else {
             expected("statement");
             consume();
         }
     }
-    ASSERT(m_parser_state.m_var_scopes.size() == 1);
-    program->add_variables(m_parser_state.m_var_scopes.last());
-    program->add_variables(m_parser_state.m_let_scopes.last());
+    if (m_parser_state.m_var_scopes.size() == 1) {
+        program->add_variables(m_parser_state.m_var_scopes.last());
+        program->add_variables(m_parser_state.m_let_scopes.last());
+        program->add_functions(m_parser_state.m_function_scopes.last());
+    } else {
+        syntax_error("Unclosed scope");
+    }
     return program;
 }
 
@@ -225,8 +244,11 @@ NonnullRefPtr<Statement> Parser::parse_statement()
 {
     auto statement = [this]() -> NonnullRefPtr<Statement> {
     switch (m_parser_state.m_current_token.type()) {
-    case TokenType::Function:
-        return parse_function_node<FunctionDeclaration>();
+    case TokenType::Function: {
+        auto declaration = parse_function_node<FunctionDeclaration>();
+        m_parser_state.m_function_scopes.last().append(declaration);
+        return declaration;
+    }
     case TokenType::CurlyOpen:
         return parse_block_statement();
     case TokenType::Return:
@@ -259,6 +281,11 @@ NonnullRefPtr<Statement> Parser::parse_statement()
         consume();
         return create_ast_node<EmptyStatement>();
     default:
+        if (match(TokenType::Identifier)) {
+            auto result = try_parse_labelled_statement();
+            if (!result.is_null())
+                return result.release_nonnull();
+        }
         if (match_expression()) {
             auto expr = parse_expression(0);
             consume_or_insert_semicolon();
@@ -288,7 +315,7 @@ RefPtr<FunctionExpression> Parser::try_parse_arrow_function_expression(bool expe
     i32 function_length = -1;
     while (true) {
         if (match(TokenType::Comma)) {
-            if (has_rest_parameter) {
+            if (has_rest_parameter || !expect_parens) {
                 parse_failed = true;
                 break;
             }
@@ -355,7 +382,7 @@ RefPtr<FunctionExpression> Parser::try_parse_arrow_function_expression(bool expe
             // for arrow function bodies which are a single expression.
             // Esprima generates a single "ArrowFunctionExpression"
             // with a "body" property.
-            auto return_expression = parse_expression(0);
+            auto return_expression = parse_expression(2);
             auto return_block = create_ast_node<BlockStatement>();
             return_block->append<ReturnStatement>(move(return_expression));
             return return_block;
@@ -367,10 +394,31 @@ RefPtr<FunctionExpression> Parser::try_parse_arrow_function_expression(bool expe
     if (!function_body_result.is_null()) {
         state_rollback_guard.disarm();
         auto body = function_body_result.release_nonnull();
-        return create_ast_node<FunctionExpression>("", move(body), move(parameters), function_length, m_parser_state.m_var_scopes.take_last());
+        return create_ast_node<FunctionExpression>("", move(body), move(parameters), function_length, m_parser_state.m_var_scopes.take_last(), true);
     }
 
     return nullptr;
+}
+
+RefPtr<Statement> Parser::try_parse_labelled_statement()
+{
+    save_state();
+    ArmedScopeGuard state_rollback_guard = [&] {
+        load_state();
+    };
+
+    auto identifier = consume(TokenType::Identifier).value();
+    if (!match(TokenType::Colon))
+        return {};
+    consume(TokenType::Colon);
+
+    if (!match_statement())
+        return {};
+    auto statement = parse_statement();
+
+    statement->set_label(identifier);
+    state_rollback_guard.disarm();
+    return statement;
 }
 
 NonnullRefPtr<Expression> Parser::parse_primary_expression()
@@ -403,10 +451,12 @@ NonnullRefPtr<Expression> Parser::parse_primary_expression()
     }
     case TokenType::NumericLiteral:
         return create_ast_node<NumericLiteral>(consume().double_value());
+    case TokenType::BigIntLiteral:
+        return create_ast_node<BigIntLiteral>(consume().value());
     case TokenType::BoolLiteral:
         return create_ast_node<BooleanLiteral>(consume().bool_value());
     case TokenType::StringLiteral:
-        return create_ast_node<StringLiteral>(consume().string_value());
+        return parse_string_literal(consume());
     case TokenType::NullLiteral:
         consume();
         return create_ast_node<NullLiteral>();
@@ -416,6 +466,8 @@ NonnullRefPtr<Expression> Parser::parse_primary_expression()
         return parse_function_node<FunctionExpression>();
     case TokenType::BracketOpen:
         return parse_array_expression();
+    case TokenType::RegexLiteral:
+        return parse_regexp_literal();
     case TokenType::TemplateLiteralStart:
         return parse_template_literal(false);
     case TokenType::New:
@@ -425,6 +477,13 @@ NonnullRefPtr<Expression> Parser::parse_primary_expression()
         consume();
         return create_ast_node<ErrorExpression>();
     }
+}
+
+NonnullRefPtr<RegExpLiteral> Parser::parse_regexp_literal()
+{
+    auto content = consume().value();
+    auto flags = match(TokenType::RegexFlags) ? consume().value() : "";
+    return create_ast_node<RegExpLiteral>(content.substring_view(1, content.length() - 2), flags);
 }
 
 NonnullRefPtr<Expression> Parser::parse_unary_prefixed_expression()
@@ -480,54 +539,128 @@ NonnullRefPtr<Expression> Parser::parse_unary_prefixed_expression()
 
 NonnullRefPtr<ObjectExpression> Parser::parse_object_expression()
 {
-    NonnullRefPtrVector<ObjectProperty> properties;
     consume(TokenType::CurlyOpen);
 
-    while (!done() && !match(TokenType::CurlyClose)) {
-        RefPtr<Expression> property_key;
-        RefPtr<Expression> property_value;
-        auto need_colon = true;
-        auto is_spread = false;
+    NonnullRefPtrVector<ObjectProperty> properties;
+    ObjectProperty::Type property_type;
 
-        if (match_identifier_name()) {
-            auto identifier = consume().value();
-            property_key = create_ast_node<StringLiteral>(identifier);
-            property_value = create_ast_node<Identifier>(identifier);
-            need_colon = false;
-        } else if (match(TokenType::StringLiteral)) {
-            property_key = create_ast_node<StringLiteral>(consume(TokenType::StringLiteral).string_value());
+    auto match_property_key = [&]() -> bool {
+        auto type = m_parser_state.m_current_token.type();
+        return match_identifier_name()
+            || type == TokenType::BracketOpen
+            || type == TokenType::StringLiteral
+            || type == TokenType::NumericLiteral
+            || type == TokenType::BigIntLiteral;
+    };
+
+    auto parse_property_key = [&]() -> NonnullRefPtr<Expression> {
+        if (match(TokenType::StringLiteral)) {
+            return parse_string_literal(consume());
         } else if (match(TokenType::NumericLiteral)) {
-            property_key = create_ast_node<StringLiteral>(consume(TokenType::NumericLiteral).value());
+            return create_ast_node<StringLiteral>(consume(TokenType::NumericLiteral).value());
+        } else if (match(TokenType::BigIntLiteral)) {
+            auto value = consume(TokenType::BigIntLiteral).value();
+            return create_ast_node<StringLiteral>(value.substring_view(0, value.length() - 1));
         } else if (match(TokenType::BracketOpen)) {
             consume(TokenType::BracketOpen);
-            property_key = parse_expression(0);
+            auto result = parse_expression(0);
             consume(TokenType::BracketClose);
-        } else if (match(TokenType::TripleDot)) {
-            consume(TokenType::TripleDot);
-            property_key = create_ast_node<SpreadExpression>(parse_expression(2));
-            property_value = property_key;
-            need_colon = false;
-            is_spread = true;
+            return result;
         } else {
-            syntax_error(String::format("Unexpected token %s as member in object initialization. Expected a numeric literal, string literal or identifier", m_parser_state.m_current_token.name()));
+            if (!match_identifier_name())
+                expected("IdentifierName");
+            return create_ast_node<StringLiteral>(consume().value());
+        }
+    };
+
+    auto skip_to_next_property = [&] {
+        while (!done() && !match(TokenType::Comma) && !match(TokenType::CurlyOpen))
             consume();
+    };
+
+    while (!done() && !match(TokenType::CurlyClose)) {
+        property_type = ObjectProperty::Type::KeyValue;
+        RefPtr<Expression> property_name;
+        RefPtr<Expression> property_value;
+
+        if (match(TokenType::TripleDot)) {
+            consume();
+            property_name = parse_expression(4);
+            properties.append(create_ast_node<ObjectProperty>(*property_name, nullptr, ObjectProperty::Type::Spread));
+            if (!match(TokenType::Comma))
+                break;
+            consume(TokenType::Comma);
             continue;
         }
 
-        if (!is_spread && match(TokenType::ParenOpen)) {
-            property_value = parse_function_node<FunctionExpression>(false);
-        } else if (need_colon || match(TokenType::Colon)) {
-            consume(TokenType::Colon);
-            property_value = parse_expression(2);
+        if (match(TokenType::Identifier)) {
+            auto identifier = consume().value();
+            if (identifier == "get" && match_property_key()) {
+                property_type = ObjectProperty::Type::Getter;
+                property_name = parse_property_key();
+            } else if (identifier == "set" && match_property_key()) {
+                property_type = ObjectProperty::Type::Setter;
+                property_name = parse_property_key();
+            } else {
+                property_name = create_ast_node<StringLiteral>(identifier);
+                property_value = create_ast_node<Identifier>(identifier);
+            }
+        } else {
+            property_name = parse_property_key();
         }
-        auto property = create_ast_node<ObjectProperty>(*property_key, *property_value);
-        properties.append(property);
-        if (is_spread)
-            property->set_is_spread();
+
+        if (property_type == ObjectProperty::Type::Getter || property_type == ObjectProperty::Type::Setter) {
+            if (!match(TokenType::ParenOpen)) {
+                syntax_error(
+                    "Expected '(' for object getter or setter property",
+                    m_parser_state.m_current_token.line_number(),
+                    m_parser_state.m_current_token.line_column());
+                skip_to_next_property();
+                continue;
+            }
+        }
+
+        if (match(TokenType::ParenOpen)) {
+            ASSERT(property_name);
+            auto function = parse_function_node<FunctionExpression>(false);
+            auto arg_count = function->parameters().size();
+
+            if (property_type == ObjectProperty::Type::Getter && arg_count != 0) {
+                syntax_error(
+                    "Object getter property must have no arguments",
+                    m_parser_state.m_current_token.line_number(),
+                    m_parser_state.m_current_token.line_column());
+                skip_to_next_property();
+                continue;
+            }
+            if (property_type == ObjectProperty::Type::Setter && arg_count != 1) {
+                syntax_error(
+                    "Object setter property must have one argument",
+                    m_parser_state.m_current_token.line_number(),
+                    m_parser_state.m_current_token.line_column());
+                skip_to_next_property();
+                continue;
+            }
+
+            properties.append(create_ast_node<ObjectProperty>(*property_name, function, property_type));
+        } else if (match(TokenType::Colon)) {
+            if (!property_name) {
+                syntax_error("Expected a property name");
+                skip_to_next_property();
+                continue;
+            }
+            consume();
+            properties.append(create_ast_node<ObjectProperty>(*property_name, parse_expression(2), property_type));
+        } else if (property_name && property_value) {
+            properties.append(create_ast_node<ObjectProperty>(*property_name, *property_value, property_type));
+        } else {
+            syntax_error("Expected a property");
+            skip_to_next_property();
+            continue;
+        }
 
         if (!match(TokenType::Comma))
             break;
-
         consume(TokenType::Comma);
     }
 
@@ -560,6 +693,36 @@ NonnullRefPtr<ArrayExpression> Parser::parse_array_expression()
     return create_ast_node<ArrayExpression>(move(elements));
 }
 
+NonnullRefPtr<StringLiteral> Parser::parse_string_literal(Token token)
+{
+    auto status = Token::StringValueStatus::Ok;
+    auto string = token.string_value(status);
+    if (status != Token::StringValueStatus::Ok) {
+        String message;
+        if (status == Token::StringValueStatus::MalformedHexEscape || status == Token::StringValueStatus::MalformedUnicodeEscape) {
+            auto type = status == Token::StringValueStatus::MalformedUnicodeEscape ? "unicode" : "hexadecimal";
+            message = String::format("Malformed %s escape sequence", type);
+        } else if (status == Token::StringValueStatus::UnicodeEscapeOverflow) {
+            message = "Unicode codepoint must not be greater than 0x10ffff in escape sequence";
+        }
+
+        syntax_error(
+            message,
+            m_parser_state.m_current_token.line_number(),
+            m_parser_state.m_current_token.line_column());
+    }
+
+    if (m_parser_state.m_use_strict_directive == UseStrictDirectiveState::Looking) {
+        if (string == "use strict" && token.type() != TokenType::TemplateLiteralString) {
+            m_parser_state.m_use_strict_directive = UseStrictDirectiveState::Found;
+        } else {
+            m_parser_state.m_use_strict_directive = UseStrictDirectiveState::None;
+        }
+    }
+
+    return create_ast_node<StringLiteral>(string);
+}
+
 NonnullRefPtr<TemplateLiteral> Parser::parse_template_literal(bool is_tagged)
 {
     consume(TokenType::TemplateLiteralStart);
@@ -577,10 +740,10 @@ NonnullRefPtr<TemplateLiteral> Parser::parse_template_literal(bool is_tagged)
     if (!match(TokenType::TemplateLiteralString))
         append_empty_string();
 
-    while (!match(TokenType::TemplateLiteralEnd) && !match(TokenType::UnterminatedTemplateLiteral)) {
+    while (!done() && !match(TokenType::TemplateLiteralEnd) && !match(TokenType::UnterminatedTemplateLiteral)) {
         if (match(TokenType::TemplateLiteralString)) {
             auto token = consume();
-            expressions.append(create_ast_node<StringLiteral>(token.string_value()));
+            expressions.append(parse_string_literal(token));
             if (is_tagged)
                 raw_strings.append(create_ast_node<StringLiteral>(token.value()));
         } else if (match(TokenType::TemplateLiteralExprStart)) {
@@ -599,6 +762,9 @@ NonnullRefPtr<TemplateLiteral> Parser::parse_template_literal(bool is_tagged)
 
             if (!match(TokenType::TemplateLiteralString))
                 append_empty_string();
+        } else {
+            expected("Template literal string or expression");
+            break;
         }
     }
 
@@ -613,14 +779,14 @@ NonnullRefPtr<TemplateLiteral> Parser::parse_template_literal(bool is_tagged)
     return create_ast_node<TemplateLiteral>(expressions);
 }
 
-NonnullRefPtr<Expression> Parser::parse_expression(int min_precedence, Associativity associativity)
+NonnullRefPtr<Expression> Parser::parse_expression(int min_precedence, Associativity associativity, Vector<TokenType> forbidden)
 {
     auto expression = parse_primary_expression();
     while (match(TokenType::TemplateLiteralStart)) {
         auto template_literal = parse_template_literal(true);
         expression = create_ast_node<TaggedTemplateLiteral>(move(expression), move(template_literal));
     }
-    while (match_secondary_expression()) {
+    while (match_secondary_expression(forbidden)) {
         int new_precedence = operator_precedence(m_parser_state.m_current_token.type());
         if (new_precedence < min_precedence)
             break;
@@ -759,6 +925,15 @@ NonnullRefPtr<Expression> Parser::parse_secondary_expression(NonnullRefPtr<Expre
             syntax_error("Invalid left-hand side in assignment");
             return create_ast_node<ErrorExpression>();
         }
+        if (m_parser_state.m_strict_mode && lhs->is_identifier()) {
+            auto name = static_cast<const Identifier&>(*lhs).string();
+            if (name == "eval" || name == "arguments") {
+                syntax_error(
+                    String::format("'%s' cannot be assigned to in strict mode code", name.characters()),
+                    m_parser_state.m_current_token.line_number(),
+                    m_parser_state.m_current_token.line_column());
+            }
+        }
         return create_ast_node<AssignmentExpression>(AssignmentOp::Assignment, move(lhs), parse_expression(min_precedence, associativity));
     case TokenType::Period:
         consume();
@@ -826,8 +1001,7 @@ NonnullRefPtr<NewExpression> Parser::parse_new_expression()
 {
     consume(TokenType::New);
 
-    // FIXME: Support full expressions as the callee as well.
-    auto callee = create_ast_node<Identifier>(consume(TokenType::Identifier).value());
+    auto callee = parse_expression(g_operator_precedence.get(TokenType::New).value(), Associativity::Right, { TokenType::ParenOpen });
 
     Vector<CallExpression::Argument> arguments;
 
@@ -873,35 +1047,59 @@ NonnullRefPtr<BlockStatement> Parser::parse_block_statement()
     ScopePusher scope(*this, ScopePusher::Let);
     auto block = create_ast_node<BlockStatement>();
     consume(TokenType::CurlyOpen);
+
+    bool first = true;
+    bool initial_strict_mode_state = m_parser_state.m_strict_mode;
+    if (initial_strict_mode_state) {
+        m_parser_state.m_use_strict_directive = UseStrictDirectiveState::None;
+        block->set_strict_mode();
+    } else {
+        m_parser_state.m_use_strict_directive = UseStrictDirectiveState::Looking;
+    }
+
     while (!done() && !match(TokenType::CurlyClose)) {
         if (match(TokenType::Semicolon)) {
             consume();
         } else if (match_statement()) {
             block->append(parse_statement());
+
+            if (first && !initial_strict_mode_state) {
+                if (m_parser_state.m_use_strict_directive == UseStrictDirectiveState::Found) {
+                    block->set_strict_mode();
+                    m_parser_state.m_strict_mode = true;
+                }
+                m_parser_state.m_use_strict_directive = UseStrictDirectiveState::None;
+            }
         } else {
             expected("statement");
             consume();
         }
+
+        first = false;
     }
+    m_parser_state.m_strict_mode = initial_strict_mode_state;
     consume(TokenType::CurlyClose);
     block->add_variables(m_parser_state.m_let_scopes.last());
+    block->add_functions(m_parser_state.m_function_scopes.last());
     return block;
 }
 
 template<typename FunctionNodeType>
-NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(bool needs_function_keyword)
+NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(bool check_for_function_and_name)
 {
-    ScopePusher scope(*this, ScopePusher::Var);
+    ScopePusher scope(*this, ScopePusher::Var | ScopePusher::Function);
 
-    if (needs_function_keyword)
+    if (check_for_function_and_name)
         consume(TokenType::Function);
 
     String name;
-    if (FunctionNodeType::must_have_name()) {
-        name = consume(TokenType::Identifier).value();
-    } else {
-        if (match(TokenType::Identifier))
+    if (check_for_function_and_name) {
+        if (FunctionNodeType::must_have_name()) {
             name = consume(TokenType::Identifier).value();
+        } else {
+            if (match(TokenType::Identifier))
+                name = consume(TokenType::Identifier).value();
+        }
     }
     consume(TokenType::ParenOpen);
     Vector<FunctionNode::Parameter> parameters;
@@ -933,10 +1131,11 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(bool needs_function_
 
     auto body = parse_block_statement();
     body->add_variables(m_parser_state.m_var_scopes.last());
+    body->add_functions(m_parser_state.m_function_scopes.last());
     return create_ast_node<FunctionNodeType>(name, move(body), move(parameters), function_length, NonnullRefPtrVector<VariableDeclaration>());
 }
 
-NonnullRefPtr<VariableDeclaration> Parser::parse_variable_declaration()
+NonnullRefPtr<VariableDeclaration> Parser::parse_variable_declaration(bool with_semicolon)
 {
     DeclarationKind declaration_kind;
 
@@ -972,10 +1171,11 @@ NonnullRefPtr<VariableDeclaration> Parser::parse_variable_declaration()
         }
         break;
     }
-    consume_or_insert_semicolon();
+    if (with_semicolon)
+        consume_or_insert_semicolon();
 
     auto declaration = create_ast_node<VariableDeclaration>(declaration_kind, move(declarations));
-    if (declaration->declaration_kind() == DeclarationKind::Var)
+    if (declaration_kind == DeclarationKind::Var)
         m_parser_state.m_var_scopes.last().append(declaration);
     else
         m_parser_state.m_let_scopes.last().append(declaration);
@@ -1000,25 +1200,37 @@ NonnullRefPtr<ThrowStatement> Parser::parse_throw_statement()
 NonnullRefPtr<BreakStatement> Parser::parse_break_statement()
 {
     consume(TokenType::Break);
+    FlyString target_label;
+    if (match(TokenType::Semicolon)) {
+        consume();
+        return create_ast_node<BreakStatement>(target_label);
+    }
+    if (match(TokenType::Identifier) && !m_parser_state.m_current_token.trivia().contains('\n'))
+        target_label = consume().value();
     consume_or_insert_semicolon();
-    // FIXME: Handle labels. When fixing this, take care to correctly implement semicolon insertion
-    return create_ast_node<BreakStatement>();
+    return create_ast_node<BreakStatement>(target_label);
 }
 
 NonnullRefPtr<ContinueStatement> Parser::parse_continue_statement()
 {
     consume(TokenType::Continue);
+    FlyString target_label;
+    if (match(TokenType::Semicolon)) {
+        consume();
+        return create_ast_node<ContinueStatement>(target_label);
+    }
+    if (match(TokenType::Identifier) && !m_parser_state.m_current_token.trivia().contains('\n'))
+        target_label = consume().value();
     consume_or_insert_semicolon();
-    // FIXME: Handle labels. When fixing this, take care to correctly implement semicolon insertion
-    return create_ast_node<ContinueStatement>();
+    return create_ast_node<ContinueStatement>(target_label);
 }
 
 NonnullRefPtr<ConditionalExpression> Parser::parse_conditional_expression(NonnullRefPtr<Expression> test)
 {
     consume(TokenType::QuestionMark);
-    auto consequent = parse_expression(0);
+    auto consequent = parse_expression(2);
     consume(TokenType::Colon);
-    auto alternate = parse_expression(0);
+    auto alternate = parse_expression(2);
     return create_ast_node<ConditionalExpression>(move(test), move(consequent), move(alternate));
 }
 
@@ -1139,57 +1351,46 @@ NonnullRefPtr<IfStatement> Parser::parse_if_statement()
     return create_ast_node<IfStatement>(move(predicate), move(consequent), move(alternate));
 }
 
-NonnullRefPtr<ForStatement> Parser::parse_for_statement()
+NonnullRefPtr<Statement> Parser::parse_for_statement()
 {
+    auto match_for_in_of = [&]() {
+        return match(TokenType::In) || (match(TokenType::Identifier) && m_parser_state.m_current_token.value() == "of");
+    };
+
     consume(TokenType::For);
 
     consume(TokenType::ParenOpen);
 
-    bool first_semicolon_consumed = false;
     bool in_scope = false;
     RefPtr<ASTNode> init;
-    switch (m_parser_state.m_current_token.type()) {
-    case TokenType::Semicolon:
-        break;
-    default:
+    if (!match(TokenType::Semicolon)) {
         if (match_expression()) {
-            init = parse_expression(0);
+            init = parse_expression(0, Associativity::Right, { TokenType::In });
+            if (match_for_in_of())
+                return parse_for_in_of_statement(*init);
         } else if (match_variable_declaration()) {
-            if (m_parser_state.m_current_token.type() != TokenType::Var) {
+            if (!match(TokenType::Var)) {
                 m_parser_state.m_let_scopes.append(NonnullRefPtrVector<VariableDeclaration>());
                 in_scope = true;
             }
-
-            init = parse_variable_declaration();
-            first_semicolon_consumed = true;
+            init = parse_variable_declaration(false);
+            if (match_for_in_of())
+                return parse_for_in_of_statement(*init);
         } else {
-            ASSERT_NOT_REACHED();
+            syntax_error("Unexpected token in for loop");
         }
-        break;
     }
-
-    if (!first_semicolon_consumed)
-        consume(TokenType::Semicolon);
+    consume(TokenType::Semicolon);
 
     RefPtr<Expression> test;
-    switch (m_parser_state.m_current_token.type()) {
-    case TokenType::Semicolon:
-        break;
-    default:
+    if (!match(TokenType::Semicolon))
         test = parse_expression(0);
-        break;
-    }
 
     consume(TokenType::Semicolon);
 
     RefPtr<Expression> update;
-    switch (m_parser_state.m_current_token.type()) {
-    case TokenType::ParenClose:
-        break;
-    default:
+    if (!match(TokenType::ParenClose))
         update = parse_expression(0);
-        break;
-    }
 
     consume(TokenType::ParenClose);
 
@@ -1200,6 +1401,28 @@ NonnullRefPtr<ForStatement> Parser::parse_for_statement()
     }
 
     return create_ast_node<ForStatement>(move(init), move(test), move(update), move(body));
+}
+
+NonnullRefPtr<Statement> Parser::parse_for_in_of_statement(NonnullRefPtr<ASTNode> lhs)
+{
+    if (lhs->is_variable_declaration()) {
+        auto declarations = static_cast<VariableDeclaration*>(lhs.ptr())->declarations();
+        if (declarations.size() > 1) {
+            syntax_error("multiple declarations not allowed in for..in/of");
+            lhs = create_ast_node<ErrorExpression>();
+        }
+        if (declarations.first().init() != nullptr) {
+            syntax_error("variable initializer not allowed in for..in/of");
+            lhs = create_ast_node<ErrorExpression>();
+        }
+    }
+    auto in_or_of = consume();
+    auto rhs = parse_expression(0);
+    consume(TokenType::ParenClose);
+    auto body = parse_statement();
+    if (in_or_of.type() == TokenType::In)
+        return create_ast_node<ForInStatement>(move(lhs), move(rhs), move(body));
+    return create_ast_node<ForOfStatement>(move(lhs), move(rhs), move(body));
 }
 
 NonnullRefPtr<DebuggerStatement> Parser::parse_debugger_statement()
@@ -1231,6 +1454,7 @@ bool Parser::match_expression() const
     auto type = m_parser_state.m_current_token.type();
     return type == TokenType::BoolLiteral
         || type == TokenType::NumericLiteral
+        || type == TokenType::BigIntLiteral
         || type == TokenType::StringLiteral
         || type == TokenType::TemplateLiteralStart
         || type == TokenType::NullLiteral
@@ -1241,6 +1465,7 @@ bool Parser::match_expression() const
         || type == TokenType::ParenOpen
         || type == TokenType::Function
         || type == TokenType::This
+        || type == TokenType::RegexLiteral
         || match_unary_prefixed_expression();
 }
 
@@ -1258,9 +1483,11 @@ bool Parser::match_unary_prefixed_expression() const
         || type == TokenType::Delete;
 }
 
-bool Parser::match_secondary_expression() const
+bool Parser::match_secondary_expression(Vector<TokenType> forbidden) const
 {
     auto type = m_parser_state.m_current_token.type();
+    if (forbidden.contains_slow(type))
+        return false;
     return type == TokenType::Plus
         || type == TokenType::PlusEquals
         || type == TokenType::Minus
@@ -1372,7 +1599,7 @@ void Parser::consume_or_insert_semicolon()
 
 Token Parser::consume(TokenType expected_type)
 {
-    if (m_parser_state.m_current_token.type() != expected_type) {
+    if (!match(expected_type)) {
         expected(Token::name(expected_type));
     }
     return consume();
@@ -1385,12 +1612,11 @@ void Parser::expected(const char* what)
 
 void Parser::syntax_error(const String& message, size_t line, size_t column)
 {
-    m_parser_state.m_has_errors = true;
     if (line == 0 || column == 0) {
         line = m_parser_state.m_current_token.line_number();
         column = m_parser_state.m_current_token.line_column();
     }
-    fprintf(stderr, "Syntax Error: %s (line: %zu, column: %zu)\n", message.characters(), line, column);
+    m_parser_state.m_errors.append({ message, line, column });
 }
 
 void Parser::save_state()

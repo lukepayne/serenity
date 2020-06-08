@@ -38,8 +38,8 @@ class StringView {
 public:
     using ConstIterator = const char*;
 
-    ALWAYS_INLINE StringView() { }
-    ALWAYS_INLINE StringView(const char* characters, size_t length)
+    ALWAYS_INLINE constexpr StringView() { }
+    ALWAYS_INLINE constexpr StringView(const char* characters, size_t length)
         : m_characters(characters)
         , m_length(length)
     {
@@ -51,7 +51,7 @@ public:
     {
         ASSERT(!Checked<uintptr_t>::addition_would_overflow((uintptr_t)characters, length));
     }
-    ALWAYS_INLINE StringView(const char* cstring)
+    ALWAYS_INLINE constexpr StringView(const char* cstring)
         : m_characters(cstring)
         , m_length(cstring ? __builtin_strlen(cstring) : 0)
     {
@@ -73,11 +73,12 @@ public:
     unsigned hash() const;
 
     bool starts_with(const StringView&) const;
-    bool ends_with(const StringView&) const;
+    bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     bool starts_with(char) const;
     bool ends_with(char) const;
     bool matches(const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
     bool contains(char) const;
+    bool equals_ignoring_case(const StringView& other) const;
 
     Optional<size_t> find_first_of(char) const;
     Optional<size_t> find_first_of(const StringView&) const;
@@ -87,6 +88,7 @@ public:
 
     StringView substring_view(size_t start, size_t length) const;
     Vector<StringView> split_view(char, bool keep_empty = false) const;
+    Vector<StringView> split_view(const StringView&, bool keep_empty = false) const;
 
     // Create a Vector of StringViews split by line endings. As of CommonMark
     // 0.29, the spec defines a line ending as "a newline (U+000A), a carriage
@@ -153,6 +155,9 @@ public:
     const StringImpl* impl() const { return m_impl; }
 
     String to_string() const;
+
+    const char* begin() { return m_characters; }
+    const char* end() { return m_characters + m_length; }
 
 private:
     friend class String;

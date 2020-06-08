@@ -50,11 +50,11 @@ class Inode : public RefCounted<Inode>
 public:
     virtual ~Inode();
 
-    virtual void one_ref_left() {}
+    virtual void one_ref_left() { }
 
     FS& fs() { return m_fs; }
     const FS& fs() const { return m_fs; }
-    unsigned fsid() const;
+    unsigned fsid() const { return m_fs.fsid(); }
     unsigned index() const { return m_index; }
 
     size_t size() const { return metadata().size; }
@@ -66,10 +66,10 @@ public:
     InodeIdentifier identifier() const { return { fsid(), index() }; }
     virtual InodeMetadata metadata() const = 0;
 
-    ByteBuffer read_entire(FileDescription* = nullptr) const;
+    KResultOr<ByteBuffer> read_entire(FileDescription* = nullptr) const;
 
     virtual ssize_t read_bytes(off_t, ssize_t, u8* buffer, FileDescription*) const = 0;
-    virtual bool traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const = 0;
+    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const = 0;
     virtual RefPtr<Inode> lookup(StringView name) = 0;
     virtual ssize_t write_bytes(off_t, ssize_t, const u8* data, FileDescription*) = 0;
     virtual KResult add_child(InodeIdentifier child_id, const StringView& name, mode_t) = 0;

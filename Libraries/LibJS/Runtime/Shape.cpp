@@ -40,7 +40,7 @@ Shape* Shape::create_unique_clone() const
     return new_shape;
 }
 
-Shape* Shape::create_put_transition(const FlyString& property_name, u8 attributes)
+Shape* Shape::create_put_transition(const FlyString& property_name, PropertyAttributes attributes)
 {
     TransitionKey key { property_name, attributes };
     if (auto* existing_shape = m_forward_transitions.get(key).value_or(nullptr))
@@ -50,7 +50,7 @@ Shape* Shape::create_put_transition(const FlyString& property_name, u8 attribute
     return new_shape;
 }
 
-Shape* Shape::create_configure_transition(const FlyString& property_name, u8 attributes)
+Shape* Shape::create_configure_transition(const FlyString& property_name, PropertyAttributes attributes)
 {
     TransitionKey key { property_name, attributes };
     if (auto* existing_shape = m_forward_transitions.get(key).value_or(nullptr))
@@ -69,7 +69,7 @@ Shape::Shape()
 {
 }
 
-Shape::Shape(Shape* previous_shape, const FlyString& property_name, u8 attributes, TransitionType transition_type)
+Shape::Shape(Shape* previous_shape, const FlyString& property_name, PropertyAttributes attributes, TransitionType transition_type)
     : m_previous(previous_shape)
     , m_property_name(property_name)
     , m_attributes(attributes)
@@ -160,7 +160,7 @@ void Shape::ensure_property_table() const
     }
 }
 
-void Shape::add_property_to_unique_shape(const FlyString& property_name, u8 attributes)
+void Shape::add_property_to_unique_shape(const FlyString& property_name, PropertyAttributes attributes)
 {
     ASSERT(is_unique());
     ASSERT(m_property_table);
@@ -168,7 +168,7 @@ void Shape::add_property_to_unique_shape(const FlyString& property_name, u8 attr
     m_property_table->set(property_name, { m_property_table->size(), attributes });
 }
 
-void Shape::reconfigure_property_in_unique_shape(const FlyString& property_name, u8 attributes)
+void Shape::reconfigure_property_in_unique_shape(const FlyString& property_name, PropertyAttributes attributes)
 {
     ASSERT(is_unique());
     ASSERT(m_property_table);

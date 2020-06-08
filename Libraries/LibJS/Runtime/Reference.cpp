@@ -50,7 +50,12 @@ void Reference::put(Interpreter& interpreter, Value value)
         return;
     }
 
-    auto* object = base().to_object(interpreter.heap());
+    if (!base().is_object() && interpreter.in_strict_mode()) {
+        interpreter.throw_exception<TypeError>(String::format("Can't assign property %s to primitive value", m_name.to_string().characters()));
+        return;
+    }
+
+    auto* object = base().to_object(interpreter);
     if (!object)
         return;
 
@@ -92,7 +97,7 @@ Value Reference::get(Interpreter& interpreter)
         return value;
     }
 
-    auto* object = base().to_object(interpreter.heap());
+    auto* object = base().to_object(interpreter);
     if (!object)
         return {};
 

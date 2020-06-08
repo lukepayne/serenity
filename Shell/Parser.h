@@ -45,6 +45,12 @@ struct Token {
     Type type;
 };
 
+enum Attributes {
+    None = 0x0,
+    ShortCircuitOnFailure = 0x1,
+    InBackground = 0x2,
+};
+
 struct Redirection {
     enum Type {
         Pipe,
@@ -55,7 +61,8 @@ struct Redirection {
     Type type;
     int fd { -1 };
     int rewire_fd { -1 };
-    String path {};
+    size_t redirection_op_start { 0 };
+    Token path {};
 };
 
 struct Rewiring {
@@ -71,6 +78,7 @@ struct Subcommand {
 
 struct Command {
     Vector<Subcommand> subcommands;
+    Attributes attributes;
 };
 
 class Parser {
@@ -89,7 +97,7 @@ private:
     };
     void commit_token(Token::Type, AllowEmptyToken = AllowEmptyToken::No);
     void commit_subcommand();
-    void commit_command();
+    void commit_command(Attributes = None);
     void do_pipe();
     void begin_redirect_read(int fd);
     void begin_redirect_write(int fd);

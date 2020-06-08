@@ -39,9 +39,9 @@ ErrorPrototype::ErrorPrototype()
     : Object(interpreter().global_object().object_prototype())
 {
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_property("name", name_getter, name_setter, attr);
-    put_native_property("message", message_getter, nullptr, attr);
-    put_native_function("toString", to_string, 0, attr);
+    define_native_property("name", name_getter, name_setter, attr);
+    define_native_property("message", message_getter, nullptr, attr);
+    define_native_function("toString", to_string, 0, attr);
 }
 
 ErrorPrototype::~ErrorPrototype()
@@ -50,7 +50,7 @@ ErrorPrototype::~ErrorPrototype()
 
 Value ErrorPrototype::name_getter(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_error())
@@ -60,20 +60,22 @@ Value ErrorPrototype::name_getter(Interpreter& interpreter)
 
 void ErrorPrototype::name_setter(Interpreter& interpreter, Value value)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return;
     if (!this_object->is_error()) {
         interpreter.throw_exception<TypeError>("Not an Error object");
         return;
     }
-    auto name = FlyString(value.to_string());
+    auto name = value.to_string(interpreter);
+    if (interpreter.exception())
+        return;
     static_cast<Error*>(this_object)->set_name(name);
 }
 
 Value ErrorPrototype::message_getter(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_error())
@@ -88,14 +90,20 @@ Value ErrorPrototype::to_string(Interpreter& interpreter)
     auto& this_object = interpreter.this_value().as_object();
 
     String name = "Error";
-    auto object_name_property = this_object.get("name");
-    if (!object_name_property.is_empty() && !object_name_property.is_undefined())
-        name = object_name_property.to_string();
+    auto name_property = this_object.get("name");
+    if (!name_property.is_empty() && !name_property.is_undefined()) {
+        name = name_property.to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
 
     String message = "";
-    auto object_message_property = this_object.get("message");
-    if (!object_message_property.is_empty() && !object_message_property.is_undefined())
-        message = object_message_property.to_string();
+    auto message_property = this_object.get("message");
+    if (!message_property.is_empty() && !message_property.is_undefined()) {
+        message = message_property.to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
 
     if (name.length() == 0)
         return js_string(interpreter, message);

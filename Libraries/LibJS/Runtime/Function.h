@@ -42,6 +42,8 @@ public:
 
     virtual void visit_children(Visitor&) override;
 
+    virtual bool is_script_function() const { return false; }
+
     BoundFunction* bind(Value bound_this_value, Vector<Value> arguments);
 
     Value bound_this() const
@@ -56,7 +58,7 @@ public:
 
 protected:
     explicit Function(Object& prototype);
-    explicit Function(Object& prototype, Value bound_this, Vector<Value> bound_arguments);
+    Function(Object& prototype, Value bound_this, Vector<Value> bound_arguments);
     virtual const char* class_name() const override { return "Function"; }
 
 private:

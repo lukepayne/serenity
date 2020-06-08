@@ -25,7 +25,7 @@
  */
 
 #include <AK/ByteBuffer.h>
-#include <AK/FileSystemPath.h>
+#include <AK/LexicalPath.h>
 #include <AK/MappedFile.h>
 #include <AK/NetworkOrdered.h>
 #include <LibCore/puff.h>
@@ -68,38 +68,28 @@ struct [[gnu::packed]] PaletteEntry
     //u8 a;
 };
 
+template<typename T>
 struct [[gnu::packed]] Tuple
 {
-    u8 gray;
-    u8 a;
+    T gray;
+    T a;
 };
 
-struct [[gnu::packed]] Tuple16
-{
-    u16 gray;
-    u16 a;
-};
-
+template<typename T>
 struct [[gnu::packed]] Triplet
 {
-    u8 r;
-    u8 g;
-    u8 b;
+    T r;
+    T g;
+    T b;
 };
 
-struct [[gnu::packed]] Triplet16
+template<typename T>
+struct [[gnu::packed]] Quad
 {
-    u16 r;
-    u16 g;
-    u16 b;
-};
-
-struct [[gnu::packed]] Quad16
-{
-    u16 r;
-    u16 g;
-    u16 b;
-    u16 a;
+    T r;
+    T g;
+    T b;
+    T a;
 };
 
 struct PNGLoadingContext {
@@ -136,9 +126,7 @@ struct PNGLoadingContext {
 class Streamer {
 public:
     Streamer(const u8* data, int size)
-        : m_original_data(data)
-        , m_original_size(size)
-        , m_data_ptr(data)
+        : m_data_ptr(data)
         , m_size_remaining(size)
     {
     }
@@ -177,8 +165,6 @@ public:
     bool at_end() const { return !m_size_remaining; }
 
 private:
-    const u8* m_original_data;
-    int m_original_size;
     const u8* m_data_ptr;
     int m_size_remaining;
 };
@@ -193,7 +179,7 @@ RefPtr<Gfx::Bitmap> load_png(const StringView& path)
         return nullptr;
     auto bitmap = load_png_impl((const u8*)mapped_file.data(), mapped_file.size());
     if (bitmap)
-        bitmap->set_mmap_name(String::format("Gfx::Bitmap [%dx%d] - Decoded PNG: %s", bitmap->width(), bitmap->height(), canonicalized_path(path).characters()));
+        bitmap->set_mmap_name(String::format("Gfx::Bitmap [%dx%d] - Decoded PNG: %s", bitmap->width(), bitmap->height(), LexicalPath::canonicalized_path(path).characters()));
     return bitmap;
 }
 
@@ -313,33 +299,60 @@ ALWAYS_INLINE static void unfilter_impl(Gfx::Bitmap& bitmap, int y, const void* 
     }
 }
 
+template<typename T>
+ALWAYS_INLINE static void unpack_grayscale_without_alpha(PNGLoadingContext& context)
+{
+    for (int y = 0; y < context.height; ++y) {
+        auto* gray_values = reinterpret_cast<const T*>(context.scanlines[y].data.data());
+        for (int i = 0; i < context.width; ++i) {
+            auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
+            pixel.r = gray_values[i];
+            pixel.g = gray_values[i];
+            pixel.b = gray_values[i];
+            pixel.a = 0xff;
+        }
+    }
+}
+
+template<typename T>
+ALWAYS_INLINE static void unpack_grayscale_with_alpha(PNGLoadingContext& context)
+{
+    for (int y = 0; y < context.height; ++y) {
+        auto* tuples = reinterpret_cast<const Tuple<T>*>(context.scanlines[y].data.data());
+        for (int i = 0; i < context.width; ++i) {
+            auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
+            pixel.r = tuples[i].gray;
+            pixel.g = tuples[i].gray;
+            pixel.b = tuples[i].gray;
+            pixel.a = tuples[i].a;
+        }
+    }
+}
+
+template<typename T>
+ALWAYS_INLINE static void unpack_triplets_without_alpha(PNGLoadingContext& context)
+{
+    for (int y = 0; y < context.height; ++y) {
+        auto* triplets = reinterpret_cast<const Triplet<T>*>(context.scanlines[y].data.data());
+        for (int i = 0; i < context.width; ++i) {
+            auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
+            pixel.r = triplets[i].r;
+            pixel.g = triplets[i].g;
+            pixel.b = triplets[i].b;
+            pixel.a = 0xff;
+        }
+    }
+}
+
 NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
 {
     // First unpack the scanlines to RGBA:
     switch (context.color_type) {
     case 0:
         if (context.bit_depth == 8) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* gray_values = (u8*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = gray_values[i];
-                    pixel.g = gray_values[i];
-                    pixel.b = gray_values[i];
-                    pixel.a = 0xff;
-                }
-            }
+            unpack_grayscale_without_alpha<u8>(context);
         } else if (context.bit_depth == 16) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* gray_values = (u16*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = gray_values[i] & 0xFF;
-                    pixel.g = gray_values[i] & 0xFF;
-                    pixel.b = gray_values[i] & 0xFF;
-                    pixel.a = 0xff;
-                }
-            }
+            unpack_grayscale_without_alpha<u16>(context);
         } else if (context.bit_depth == 1 || context.bit_depth == 2 || context.bit_depth == 4) {
             auto pixels_per_byte = 8 / context.bit_depth;
             auto mask = (1 << context.bit_depth) - 1;
@@ -361,54 +374,18 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
         break;
     case 4:
         if (context.bit_depth == 8) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* tuples = (Tuple*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = tuples[i].gray;
-                    pixel.g = tuples[i].gray;
-                    pixel.b = tuples[i].gray;
-                    pixel.a = tuples[i].a;
-                }
-            }
+            unpack_grayscale_with_alpha<u8>(context);
         } else if (context.bit_depth == 16) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* tuples = (Tuple16*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = tuples[i].gray & 0xFF;
-                    pixel.g = tuples[i].gray & 0xFF;
-                    pixel.b = tuples[i].gray & 0xFF;
-                    pixel.a = tuples[i].a & 0xFF;
-                }
-            }
+            unpack_grayscale_with_alpha<u16>(context);
         } else {
             ASSERT_NOT_REACHED();
         }
         break;
     case 2:
         if (context.bit_depth == 8) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* triplets = (Triplet*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = triplets[i].r;
-                    pixel.g = triplets[i].g;
-                    pixel.b = triplets[i].b;
-                    pixel.a = 0xff;
-                }
-            }
+            unpack_triplets_without_alpha<u8>(context);
         } else if (context.bit_depth == 16) {
-            for (int y = 0; y < context.height; ++y) {
-                auto* triplets = (Triplet16*)context.scanlines[y].data.data();
-                for (int i = 0; i < context.width; ++i) {
-                    auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
-                    pixel.r = triplets[i].r & 0xFF;
-                    pixel.g = triplets[i].g & 0xFF;
-                    pixel.b = triplets[i].b & 0xFF;
-                    pixel.a = 0xff;
-                }
-            }
+            unpack_grayscale_without_alpha<u16>(context);
         } else {
             ASSERT_NOT_REACHED();
         }
@@ -420,7 +397,7 @@ NEVER_INLINE FLATTEN static void unfilter(PNGLoadingContext& context)
             }
         } else if (context.bit_depth == 16) {
             for (int y = 0; y < context.height; ++y) {
-                auto* triplets = (Quad16*)context.scanlines[y].data.data();
+                auto* triplets = reinterpret_cast<const Quad<u16>*>(context.scanlines[y].data.data());
                 for (int i = 0; i < context.width; ++i) {
                     auto& pixel = (Pixel&)context.bitmap->scanline(y)[i];
                     pixel.r = triplets[i].r & 0xFF;

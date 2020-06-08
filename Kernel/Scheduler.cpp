@@ -42,6 +42,7 @@
 namespace Kernel {
 
 SchedulerData* g_scheduler_data;
+timeval g_timeofday;
 
 void Scheduler::init_thread(Thread& thread)
 {
@@ -250,7 +251,7 @@ Thread::WaitBlocker::WaitBlocker(int wait_options, pid_t& waitee_pid)
 
 bool Thread::WaitBlocker::should_unblock(Thread& thread, time_t, long)
 {
-    bool should_unblock = false;
+    bool should_unblock = m_wait_options & WNOHANG;
     if (m_waitee_pid != -1) {
         auto* peer = Process::from_pid(m_waitee_pid);
         if (!peer)
@@ -263,15 +264,19 @@ bool Thread::WaitBlocker::should_unblock(Thread& thread, time_t, long)
         bool child_exited = child.is_dead();
         bool child_stopped = false;
         if (child.thread_count()) {
-            auto& child_thread = child.any_thread();
-            if (child_thread.state() == Thread::State::Stopped && !child_thread.has_pending_signal(SIGCONT))
-                child_stopped = true;
+            child.for_each_thread([&](auto& child_thread) {
+                if (child_thread.state() == Thread::State::Stopped && !child_thread.has_pending_signal(SIGCONT)) {
+                    child_stopped = true;
+                    return IterationDecision::Break;
+                }
+                return IterationDecision::Continue;
+            });
         }
 
-        bool wait_finished = ((m_wait_options & WEXITED) && child_exited)
+        bool fits_the_spec = ((m_wait_options & WEXITED) && child_exited)
             || ((m_wait_options & WSTOPPED) && child_stopped);
 
-        if (!wait_finished)
+        if (!fits_the_spec)
             return IterationDecision::Continue;
 
         m_waitee_pid = child.pid();
@@ -596,10 +601,7 @@ void Scheduler::timer_tick(const RegisterState& regs)
 
     ++g_uptime;
 
-    timeval tv;
-    tv.tv_sec = TimeManagement::the().epoch_time();
-    tv.tv_usec = TimeManagement::the().ticks_this_second() * 1000;
-    Process::update_info_page_timestamp(tv);
+    g_timeofday = TimeManagement::now_as_timeval();
 
     if (Process::current->is_profiling()) {
         SmapDisabler disabler;

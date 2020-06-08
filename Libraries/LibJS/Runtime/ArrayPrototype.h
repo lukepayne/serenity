@@ -46,17 +46,23 @@ private:
     static Value push(Interpreter&);
     static Value shift(Interpreter&);
     static Value to_string(Interpreter&);
+    static Value to_locale_string(Interpreter&);
     static Value unshift(Interpreter&);
     static Value join(Interpreter&);
     static Value concat(Interpreter&);
     static Value slice(Interpreter&);
     static Value index_of(Interpreter&);
+    static Value reduce(Interpreter&);
+    static Value reduce_right(Interpreter&);
     static Value reverse(Interpreter&);
     static Value last_index_of(Interpreter&);
     static Value includes(Interpreter&);
     static Value find(Interpreter&);
     static Value find_index(Interpreter&);
     static Value some(Interpreter&);
+    static Value every(Interpreter&);
+    static Value splice(Interpreter&);
+    static Value fill(Interpreter&);
 };
 
 }

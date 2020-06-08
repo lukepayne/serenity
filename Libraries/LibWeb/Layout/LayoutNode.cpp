@@ -27,9 +27,11 @@
 #include <LibGUI/Painter.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
-#include <LibWeb/Frame.h>
+#include <LibWeb/Frame/Frame.h>
 #include <LibWeb/Layout/LayoutBlock.h>
+#include <LibWeb/Layout/LayoutDocument.h>
 #include <LibWeb/Layout/LayoutNode.h>
+#include <LibWeb/Layout/LayoutReplaced.h>
 
 namespace Web {
 
@@ -46,20 +48,43 @@ LayoutNode::~LayoutNode()
         m_node->set_layout_node({}, nullptr);
 }
 
-void LayoutNode::layout()
+void LayoutNode::layout(LayoutMode layout_mode)
 {
-    for_each_child([](auto& child) {
-        child.layout();
+    for_each_child([&](auto& child) {
+        child.layout(layout_mode);
     });
+}
+
+bool LayoutNode::can_contain_boxes_with_position_absolute() const
+{
+    return style().position() != CSS::Position::Static || is_root();
 }
 
 const LayoutBlock* LayoutNode::containing_block() const
 {
-    for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
-        if (is<LayoutBlock>(*ancestor))
-            return to<LayoutBlock>(ancestor);
+    auto nearest_block_ancestor = [this] {
+        auto* ancestor = parent();
+        while (ancestor && !is<LayoutBlock>(*ancestor))
+            ancestor = ancestor->parent();
+        return to<LayoutBlock>(ancestor);
+    };
+
+    if (is_text())
+        return nearest_block_ancestor();
+
+    if (is_absolutely_positioned()) {
+        auto* ancestor = parent();
+        while (ancestor && !ancestor->can_contain_boxes_with_position_absolute())
+            ancestor = ancestor->parent();
+        while (ancestor && (!is<LayoutBlock>(ancestor) || ancestor->is_anonymous()))
+            ancestor = ancestor->containing_block();
+        return to<LayoutBlock>(ancestor);
     }
-    return nullptr;
+
+    if (style().position() == CSS::Position::Fixed)
+        return &root();
+
+    return nearest_block_ancestor();
 }
 
 void LayoutNode::render(RenderingContext& context)
@@ -111,11 +136,11 @@ LayoutDocument& LayoutNode::root()
     return *document().layout_node();
 }
 
-void LayoutNode::split_into_lines(LayoutBlock& container)
+void LayoutNode::split_into_lines(LayoutBlock& container, LayoutMode layout_mode)
 {
     for_each_child([&](auto& child) {
         if (child.is_inline()) {
-            child.split_into_lines(container);
+            child.split_into_lines(container, layout_mode);
         } else {
             // FIXME: Support block children of inlines.
         }
@@ -137,6 +162,13 @@ void LayoutNode::set_needs_display()
     }
 }
 
+float LayoutNode::font_size() const
+{
+    // FIXME: This doesn't work right for relative font-sizes
+    auto length = style().length_or_fallback(CSS::PropertyID::FontSize, Length(10, Length::Type::Px));
+    return length.raw_value();
+}
+
 Gfx::FloatPoint LayoutNode::box_type_agnostic_position() const
 {
     if (is_box())
@@ -153,6 +185,11 @@ Gfx::FloatPoint LayoutNode::box_type_agnostic_position() const
         });
     }
     return position;
+}
+
+bool LayoutNode::is_absolutely_positioned() const
+{
+    return style().position() == CSS::Position::Absolute;
 }
 
 }

@@ -33,7 +33,7 @@
 #include <Kernel/Forward.h>
 #include <Kernel/KResult.h>
 #include <Kernel/UnixTypes.h>
-#include <LibBareMetal/Memory/VirtualAddress.h>
+#include <Kernel/VirtualAddress.h>
 
 namespace Kernel {
 
@@ -69,21 +69,21 @@ public:
     virtual ~File();
 
     virtual KResultOr<NonnullRefPtr<FileDescription>> open(int options);
-    virtual void close();
+    virtual KResult close();
 
     virtual bool can_read(const FileDescription&, size_t) const = 0;
     virtual bool can_write(const FileDescription&, size_t) const = 0;
 
     virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) = 0;
     virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) = 0;
-    virtual int ioctl(FileDescription&, unsigned request, unsigned arg);
+    virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg);
     virtual KResultOr<Region*> mmap(Process&, FileDescription&, VirtualAddress preferred_vaddr, size_t offset, size_t size, int prot, bool shared);
 
     virtual String absolute_path(const FileDescription&) const = 0;
 
     virtual KResult truncate(u64) { return KResult(-EINVAL); }
-    virtual KResult chown(uid_t, gid_t) { return KResult(-EBADF); }
-    virtual KResult chmod(mode_t) { return KResult(-EBADF); }
+    virtual KResult chown(FileDescription&, uid_t, gid_t) { return KResult(-EBADF); }
+    virtual KResult chmod(FileDescription&, mode_t) { return KResult(-EBADF); }
 
     virtual const char* class_name() const = 0;
 

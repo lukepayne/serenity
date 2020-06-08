@@ -81,10 +81,7 @@ public:
 
     Palette palette() const { return Palette(*m_palette); }
 
-    RefPtr<Core::ConfigFile> wm_config() const
-    {
-        return m_wm_config;
-    }
+    RefPtr<Core::ConfigFile> config() const { return m_config; }
     void reload_config(bool);
 
     void add_window(Window&);
@@ -95,11 +92,12 @@ public:
     void notify_minimization_state_changed(Window&);
     void notify_opacity_changed(Window&);
     void notify_occlusion_state_changed(Window&);
+    void notify_progress_changed(Window&);
     void notify_client_changed_app_menubar(ClientConnection&);
 
     Gfx::Rect maximized_window_rect(const Window&) const;
 
-    ClientConnection* dnd_client() { return m_dnd_client.ptr(); }
+    const ClientConnection* dnd_client() const { return m_dnd_client.ptr(); }
     const String& dnd_text() const { return m_dnd_text; }
     const String& dnd_data_type() const { return m_dnd_data_type; }
     const String& dnd_data() const { return m_dnd_data; }
@@ -109,11 +107,11 @@ public:
     void start_dnd_drag(ClientConnection&, const String& text, Gfx::Bitmap*, const String& data_type, const String& data);
     void end_dnd_drag();
 
-    Window* active_window() { return m_active_window.ptr(); }
+    const Window* active_window() const { return m_active_window.ptr(); }
     const ClientConnection* active_client() const;
     bool active_window_is_modal() const { return m_active_window && m_active_window->is_modal(); }
 
-    Window* highlight_window() { return m_highlight_window.ptr(); }
+    const Window* highlight_window() const { return m_highlight_window.ptr(); }
     void set_highlight_window(Window*);
 
     void move_to_front_and_make_active(Window&);
@@ -133,8 +131,6 @@ public:
     const Cursor& move_cursor() const { return *m_move_cursor; }
     const Cursor& drag_cursor() const { return *m_drag_cursor; }
 
-    void invalidate(const Window&);
-    void invalidate(const Window&, const Gfx::Rect&);
     void invalidate(const Gfx::Rect&);
     void invalidate();
     void flush(const Gfx::Rect&);
@@ -148,15 +144,12 @@ public:
     void set_active_window(Window*);
     void set_hovered_button(Button*);
 
-    Button* cursor_tracking_button() { return m_cursor_tracking_button.ptr(); }
+    const Button* cursor_tracking_button() const { return m_cursor_tracking_button.ptr(); }
     void set_cursor_tracking_button(Button*);
 
     void set_resize_candidate(Window&, ResizeDirection);
     void clear_resize_candidate();
     ResizeDirection resize_direction_of_window(const Window&);
-
-    bool any_opaque_window_contains_rect(const Gfx::Rect&);
-    bool any_opaque_window_above_this_one_contains_rect(const Window&, const Gfx::Rect&);
 
     void tell_wm_listeners_window_state_changed(Window&);
     void tell_wm_listeners_window_icon_changed(Window&);
@@ -206,8 +199,6 @@ private:
     void tell_wm_listener_about_window_icon(Window& listener, Window&);
     void tell_wm_listener_about_window_rect(Window& listener, Window&);
     void pick_new_active_window();
-
-    void recompute_occlusions();
 
     RefPtr<Cursor> m_arrow_cursor;
     RefPtr<Cursor> m_hand_cursor;
@@ -268,8 +259,6 @@ private:
     Gfx::Point m_resize_origin;
     ResizeDirection m_resize_direction { ResizeDirection::None };
 
-    bool m_moved_or_resized_since_logo_keydown { false };
-
     u8 m_keyboard_modifiers { 0 };
 
     WindowSwitcher m_switcher;
@@ -279,7 +268,7 @@ private:
 
     NonnullRefPtr<Gfx::PaletteImpl> m_palette;
 
-    RefPtr<Core::ConfigFile> m_wm_config;
+    RefPtr<Core::ConfigFile> m_config;
 
     WeakPtr<ClientConnection> m_dnd_client;
     String m_dnd_text;

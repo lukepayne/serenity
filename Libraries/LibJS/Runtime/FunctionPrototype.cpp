@@ -46,12 +46,12 @@ FunctionPrototype::FunctionPrototype()
 void FunctionPrototype::initialize()
 {
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("apply", apply, 2, attr);
-    put_native_function("bind", bind, 1, attr);
-    put_native_function("call", call, 1, attr);
-    put_native_function("toString", to_string, 0, attr);
-    put("length", Value(0), Attribute::Configurable);
-    put("name", js_string(heap(), ""), Attribute::Configurable);
+    define_native_function("apply", apply, 2, attr);
+    define_native_function("bind", bind, 1, attr);
+    define_native_function("call", call, 1, attr);
+    define_native_function("toString", to_string, 0, attr);
+    define_property("length", Value(0), Attribute::Configurable);
+    define_property("name", js_string(heap(), ""), Attribute::Configurable);
 }
 
 FunctionPrototype::~FunctionPrototype()
@@ -60,7 +60,7 @@ FunctionPrototype::~FunctionPrototype()
 
 Value FunctionPrototype::apply(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_function())
@@ -73,10 +73,14 @@ Value FunctionPrototype::apply(Interpreter& interpreter)
     if (!arg_array.is_object())
         return interpreter.throw_exception<TypeError>("argument array must be an object");
     auto length_property = arg_array.as_object().get("length");
-    auto length = length_property.to_size_t();
+    if (interpreter.exception())
+        return {};
+    auto length = length_property.to_size_t(interpreter);
+    if (interpreter.exception())
+        return {};
     MarkedValueList arguments(interpreter.heap());
     for (size_t i = 0; i < length; ++i) {
-        auto element = arg_array.as_object().get(String::number(i));
+        auto element = arg_array.as_object().get(i);
         if (interpreter.exception())
             return {};
         arguments.append(element.value_or(js_undefined()));
@@ -86,7 +90,7 @@ Value FunctionPrototype::apply(Interpreter& interpreter)
 
 Value FunctionPrototype::bind(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_function())
@@ -106,7 +110,7 @@ Value FunctionPrototype::bind(Interpreter& interpreter)
 
 Value FunctionPrototype::call(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_function())
@@ -123,7 +127,7 @@ Value FunctionPrototype::call(Interpreter& interpreter)
 
 Value FunctionPrototype::to_string(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_function())

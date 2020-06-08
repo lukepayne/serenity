@@ -56,6 +56,7 @@ public:
     void fill_rect_with_checkerboard(const Rect&, const Size&, Color color_dark, Color color_light);
     void fill_rect_with_gradient(Orientation, const Rect&, Color gradient_start, Color gradient_end);
     void fill_rect_with_gradient(const Rect&, Color gradient_start, Color gradient_end);
+    void fill_ellipse(const Rect&, Color);
     void draw_rect(const Rect&, Color, bool rough = false);
     void draw_bitmap(const Point&, const CharacterBitmap&, Color = Color());
     void draw_bitmap(const Point&, const GlyphBitmap&, Color = Color());
@@ -74,8 +75,10 @@ public:
     void blit_scaled(const Rect&, const Gfx::Bitmap&, const Rect&, float, float);
     void draw_text(const Rect&, const StringView&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
     void draw_text(const Rect&, const StringView&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
-    void draw_glyph(const Point&, char, Color);
-    void draw_glyph(const Point&, char, const Font&, Color);
+    void draw_text(const Rect&, const Utf32View&, const Font&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_text(const Rect&, const Utf32View&, TextAlignment = TextAlignment::TopLeft, Color = Color::Black, TextElision = TextElision::None);
+    void draw_glyph(const Point&, u32, Color);
+    void draw_glyph(const Point&, u32, const Font&, Color);
     void draw_emoji(const Point&, const Gfx::Bitmap&, const Font&);
     void draw_glyph_or_emoji(const Point&, u32 codepoint, const Font&, Color);
 
@@ -126,6 +129,7 @@ protected:
     void draw_pixel(const Point&, Color, int thickness = 1);
 
     void draw_text_line(const Rect&, const Utf8View&, const Font&, TextAlignment, Color, TextElision);
+    void draw_text_line(const Rect&, const Utf32View&, const Font&, TextAlignment, Color, TextElision);
 
     struct State {
         const Font* font;

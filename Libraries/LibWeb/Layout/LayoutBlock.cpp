@@ -31,6 +31,7 @@
 #include <LibWeb/Layout/LayoutInline.h>
 #include <LibWeb/Layout/LayoutReplaced.h>
 #include <LibWeb/Layout/LayoutText.h>
+#include <LibWeb/Layout/LayoutWidget.h>
 #include <math.h>
 
 namespace Web {
@@ -53,22 +54,27 @@ LayoutNode& LayoutBlock::inline_wrapper()
     return *last_child();
 }
 
-void LayoutBlock::layout()
+void LayoutBlock::layout(LayoutMode layout_mode)
 {
     compute_width();
 
     if (!is_inline())
         compute_position();
 
-    if (children_are_inline())
-        layout_inline_children();
-    else
-        layout_block_children();
+    layout_children(layout_mode);
 
     compute_height();
 }
 
-void LayoutBlock::layout_block_children()
+void LayoutBlock::layout_children(LayoutMode layout_mode)
+{
+    if (children_are_inline())
+        layout_inline_children(layout_mode);
+    else
+        layout_block_children(layout_mode);
+}
+
+void LayoutBlock::layout_block_children(LayoutMode layout_mode)
 {
     ASSERT(!children_are_inline());
     float content_height = 0;
@@ -77,26 +83,36 @@ void LayoutBlock::layout_block_children()
         if (child.is_inline())
             return;
         auto& child_block = static_cast<LayoutBlock&>(child);
-        child_block.layout();
-        content_height = child_block.rect().bottom() + child_block.box_model().full_margin().bottom - rect().top();
+        child_block.layout(layout_mode);
+
+        if (!child_block.is_absolutely_positioned())
+            content_height = child_block.rect().bottom() + child_block.box_model().full_margin(*this).bottom - rect().top();
     });
+    if (layout_mode != LayoutMode::Default) {
+        float max_width = 0;
+        for_each_child([&](auto& child) {
+            if (child.is_box() && !child.is_absolutely_positioned())
+                max_width = max(max_width, to<LayoutBox>(child).width());
+        });
+        rect().set_width(max_width);
+    }
     rect().set_height(content_height);
 }
 
-void LayoutBlock::layout_inline_children()
+void LayoutBlock::layout_inline_children(LayoutMode layout_mode)
 {
     ASSERT(children_are_inline());
     m_line_boxes.clear();
     for_each_child([&](auto& child) {
         ASSERT(child.is_inline());
-        child.split_into_lines(*this);
+        child.split_into_lines(*this, layout_mode);
     });
 
     for (auto& line_box : m_line_boxes) {
         line_box.trim_trailing_whitespace();
     }
 
-    float min_line_height = style().line_height();
+    float min_line_height = style().line_height(*this);
     float line_spacing = min_line_height - style().font().glyph_height();
     float content_height = 0;
 
@@ -111,6 +127,8 @@ void LayoutBlock::layout_inline_children()
         text_align = CSS::ValueID::Right;
     else if (text_align_string == "justify")
         text_align = CSS::ValueID::Justify;
+
+    float max_linebox_width = 0;
 
     for (auto& line_box : m_line_boxes) {
         float max_height = min_line_height;
@@ -149,6 +167,10 @@ void LayoutBlock::layout_inline_children()
 
         for (size_t i = 0; i < line_box.fragments().size(); ++i) {
             auto& fragment = line_box.fragments()[i];
+
+            if (fragment.layout_node().is_absolutely_positioned())
+                continue;
+
             // Vertically align everyone's bottom to the line.
             // FIXME: Support other kinds of vertical alignment.
             fragment.rect().set_x(roundf(x_offset + fragment.rect().x()));
@@ -173,16 +195,22 @@ void LayoutBlock::layout_inline_children()
             if (fragment.layout_node().is_inline_block()) {
                 auto& inline_block = const_cast<LayoutBlock&>(to<LayoutBlock>(fragment.layout_node()));
                 inline_block.set_rect(fragment.rect());
-                inline_block.layout();
+                inline_block.layout(layout_mode);
             }
 
             float final_line_box_width = 0;
             for (auto& fragment : line_box.fragments())
                 final_line_box_width += fragment.rect().width();
             line_box.m_width = final_line_box_width;
+
+            max_linebox_width = max(max_linebox_width, final_line_box_width);
         }
 
         content_height += max_height;
+    }
+
+    if (layout_mode != LayoutMode::Default) {
+        rect().set_width(max_linebox_width);
     }
 
     rect().set_height(content_height);
@@ -193,7 +221,7 @@ void LayoutBlock::compute_width()
     auto& style = this->style();
 
     auto auto_value = Length();
-    auto zero_value = Length(0, Length::Type::Absolute);
+    auto zero_value = Length(0, Length::Type::Px);
 
     Length margin_left;
     Length margin_right;
@@ -219,49 +247,101 @@ void LayoutBlock::compute_width()
 
         float total_px = 0;
         for (auto& value : { margin_left, border_left, padding_left, width, padding_right, border_right, margin_right }) {
-            total_px += value.to_px();
+            total_px += value.to_px(*this);
         }
 
 #ifdef HTML_DEBUG
         dbg() << "Total: " << total_px;
 #endif
 
-        // 10.3.3 Block-level, non-replaced elements in normal flow
-        // If 'width' is not 'auto' and 'border-left-width' + 'padding-left' + 'width' + 'padding-right' + 'border-right-width' (plus any of 'margin-left' or 'margin-right' that are not 'auto') is larger than the width of the containing block, then any 'auto' values for 'margin-left' or 'margin-right' are, for the following rules, treated as zero.
-        if (width.is_auto() && total_px > containing_block.width()) {
-            if (margin_left.is_auto())
-                margin_left = zero_value;
-            if (margin_right.is_auto())
-                margin_right = zero_value;
-        }
+        if (!is_replaced() && !is_inline()) {
+            // 10.3.3 Block-level, non-replaced elements in normal flow
+            // If 'width' is not 'auto' and 'border-left-width' + 'padding-left' + 'width' + 'padding-right' + 'border-right-width' (plus any of 'margin-left' or 'margin-right' that are not 'auto') is larger than the width of the containing block, then any 'auto' values for 'margin-left' or 'margin-right' are, for the following rules, treated as zero.
+            if (width.is_auto() && total_px > containing_block.width()) {
+                if (margin_left.is_auto())
+                    margin_left = zero_value;
+                if (margin_right.is_auto())
+                    margin_right = zero_value;
+            }
 
-        // 10.3.3 cont'd.
-        auto underflow_px = containing_block.width() - total_px;
+            // 10.3.3 cont'd.
+            auto underflow_px = containing_block.width() - total_px;
 
-        if (width.is_auto()) {
-            if (margin_left.is_auto())
-                margin_left = zero_value;
-            if (margin_right.is_auto())
-                margin_right = zero_value;
-            if (underflow_px >= 0) {
-                width = Length(underflow_px, Length::Type::Absolute);
+            if (width.is_auto()) {
+                if (margin_left.is_auto())
+                    margin_left = zero_value;
+                if (margin_right.is_auto())
+                    margin_right = zero_value;
+                if (underflow_px >= 0) {
+                    width = Length(underflow_px, Length::Type::Px);
+                } else {
+                    width = zero_value;
+                    margin_right = Length(margin_right.to_px(*this) + underflow_px, Length::Type::Px);
+                }
             } else {
-                width = zero_value;
-                margin_right = Length(margin_right.to_px() + underflow_px, Length::Type::Absolute);
+                if (!margin_left.is_auto() && !margin_right.is_auto()) {
+                    margin_right = Length(margin_right.to_px(*this) + underflow_px, Length::Type::Px);
+                } else if (!margin_left.is_auto() && margin_right.is_auto()) {
+                    margin_right = Length(underflow_px, Length::Type::Px);
+                } else if (margin_left.is_auto() && !margin_right.is_auto()) {
+                    margin_left = Length(underflow_px, Length::Type::Px);
+                } else { // margin_left.is_auto() && margin_right.is_auto()
+                    auto half_of_the_underflow = Length(underflow_px / 2, Length::Type::Px);
+                    margin_left = half_of_the_underflow;
+                    margin_right = half_of_the_underflow;
+                }
             }
-        } else {
-            if (!margin_left.is_auto() && !margin_right.is_auto()) {
-                margin_right = Length(margin_right.to_px() + underflow_px, Length::Type::Absolute);
-            } else if (!margin_left.is_auto() && margin_right.is_auto()) {
-                margin_right = Length(underflow_px, Length::Type::Absolute);
-            } else if (margin_left.is_auto() && !margin_right.is_auto()) {
-                margin_left = Length(underflow_px, Length::Type::Absolute);
-            } else { // margin_left.is_auto() && margin_right.is_auto()
-                auto half_of_the_underflow = Length(underflow_px / 2, Length::Type::Absolute);
-                margin_left = half_of_the_underflow;
-                margin_right = half_of_the_underflow;
+        } else if (!is_replaced() && is_inline_block()) {
+
+            // 10.3.9 'Inline-block', non-replaced elements in normal flow
+
+            // A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'.
+            if (margin_left.is_auto())
+                margin_left = zero_value;
+            if (margin_right.is_auto())
+                margin_right = zero_value;
+
+            // If 'width' is 'auto', the used value is the shrink-to-fit width as for floating elements.
+            if (width.is_auto()) {
+                auto greatest_child_width = [&] {
+                    float max_width = 0;
+                    if (children_are_inline()) {
+                        for (auto& box : line_boxes()) {
+                            max_width = max(max_width, box.width());
+                        }
+                    } else {
+                        for_each_child([&](auto& child) {
+                            if (child.is_box())
+                                max_width = max(max_width, to<LayoutBox>(child).width());
+                        });
+                    }
+                    return max_width;
+                };
+
+                // Find the available width: in this case, this is the width of the containing
+                // block minus the used values of 'margin-left', 'border-left-width', 'padding-left',
+                // 'padding-right', 'border-right-width', 'margin-right', and the widths of any relevant scroll bars.
+
+                float available_width = containing_block.width()
+                    - margin_left.to_px(*this) - border_left.to_px(*this) - padding_left.to_px(*this)
+                    - padding_right.to_px(*this) - border_right.to_px(*this) - margin_right.to_px(*this);
+
+                // Calculate the preferred width by formatting the content without breaking lines
+                // other than where explicit line breaks occur.
+                layout_children(LayoutMode::OnlyRequiredLineBreaks);
+                float preferred_width = greatest_child_width();
+
+                // Also calculate the preferred minimum width, e.g., by trying all possible line breaks.
+                // CSS 2.2 does not define the exact algorithm.
+
+                layout_children(LayoutMode::AllPossibleLineBreaks);
+                float preferred_minimum_width = greatest_child_width();
+
+                // Then the shrink-to-fit width is: min(max(preferred minimum width, available width), preferred width).
+                width = Length(min(max(preferred_minimum_width, available_width), preferred_width), Length::Type::Px);
             }
         }
+
         return width;
     };
 
@@ -274,7 +354,7 @@ void LayoutBlock::compute_width()
     //    but this time using the computed value of 'max-width' as the computed value for 'width'.
     auto specified_max_width = style.length_or_fallback(CSS::PropertyID::MaxWidth, auto_value, containing_block.width());
     if (!specified_max_width.is_auto()) {
-        if (used_width.to_px() > specified_max_width.to_px()) {
+        if (used_width.to_px(*this) > specified_max_width.to_px(*this)) {
             used_width = try_compute_width(specified_max_width);
         }
     }
@@ -283,12 +363,12 @@ void LayoutBlock::compute_width()
     //    but this time using the value of 'min-width' as the computed value for 'width'.
     auto specified_min_width = style.length_or_fallback(CSS::PropertyID::MinWidth, auto_value, containing_block.width());
     if (!specified_min_width.is_auto()) {
-        if (used_width.to_px() < specified_min_width.to_px()) {
+        if (used_width.to_px(*this) < specified_min_width.to_px(*this)) {
             used_width = try_compute_width(specified_min_width);
         }
     }
 
-    rect().set_width(used_width.to_px());
+    rect().set_width(used_width.to_px(*this));
     box_model().margin().left = margin_left;
     box_model().margin().right = margin_right;
     box_model().border().left = border_left;
@@ -301,12 +381,9 @@ void LayoutBlock::compute_position()
 {
     auto& style = this->style();
 
-    auto auto_value = Length();
-    auto zero_value = Length(0, Length::Type::Absolute);
+    auto zero_value = Length(0, Length::Type::Px);
 
     auto& containing_block = *this->containing_block();
-
-    auto width = style.length_or_fallback(CSS::PropertyID::Width, auto_value, containing_block.width());
 
     if (style.position() == CSS::Position::Absolute) {
         box_model().offset().top = style.length_or_fallback(CSS::PropertyID::Top, zero_value, containing_block.height());
@@ -322,18 +399,18 @@ void LayoutBlock::compute_position()
     box_model().padding().top = style.length_or_fallback(CSS::PropertyID::PaddingTop, zero_value, containing_block.width());
     box_model().padding().bottom = style.length_or_fallback(CSS::PropertyID::PaddingBottom, zero_value, containing_block.width());
 
-    float position_x = box_model().margin().left.to_px()
-        + box_model().border().left.to_px()
-        + box_model().padding().left.to_px()
-        + box_model().offset().left.to_px();
+    float position_x = box_model().margin().left.to_px(*this)
+        + box_model().border().left.to_px(*this)
+        + box_model().padding().left.to_px(*this)
+        + box_model().offset().left.to_px(*this);
 
     if (style.position() != CSS::Position::Absolute || containing_block.style().position() == CSS::Position::Absolute)
         position_x += containing_block.x();
 
     rect().set_x(position_x);
 
-    float position_y = box_model().full_margin().top
-        + box_model().offset().top.to_px();
+    float position_y = box_model().full_margin(*this).top
+        + box_model().offset().top.to_px(*this);
 
     if (style.position() != CSS::Position::Absolute || containing_block.style().position() == CSS::Position::Absolute) {
         LayoutBlock* relevant_sibling = previous_sibling();
@@ -349,7 +426,7 @@ void LayoutBlock::compute_position()
             auto& previous_sibling_rect = relevant_sibling->rect();
             auto& previous_sibling_style = relevant_sibling->box_model();
             position_y += previous_sibling_rect.y() + previous_sibling_rect.height();
-            position_y += previous_sibling_style.full_margin().bottom;
+            position_y += previous_sibling_style.full_margin(*this).bottom;
         }
     }
 
@@ -361,7 +438,7 @@ void LayoutBlock::compute_height()
     auto& style = this->style();
     auto height = style.length_or_fallback(CSS::PropertyID::Height, Length(), containing_block()->height());
     if (height.is_absolute())
-        rect().set_height(height.to_px());
+        rect().set_height(height.to_px(*this));
 }
 
 void LayoutBlock::render(RenderingContext& context)
@@ -391,6 +468,8 @@ HitTestResult LayoutBlock::hit_test(const Gfx::Point& position) const
     for (auto& line_box : m_line_boxes) {
         for (auto& fragment : line_box.fragments()) {
             if (enclosing_int_rect(fragment.rect()).contains(position)) {
+                if (fragment.layout_node().is_block())
+                    return to<LayoutBlock>(fragment.layout_node()).hit_test(position);
                 return { fragment.layout_node(), fragment.text_index_at(position.x()) };
             }
         }
@@ -426,11 +505,11 @@ LineBox& LayoutBlock::add_line_box()
     return m_line_boxes.last();
 }
 
-void LayoutBlock::split_into_lines(LayoutBlock& container)
+void LayoutBlock::split_into_lines(LayoutBlock& container, LayoutMode layout_mode)
 {
     ASSERT(is_inline());
 
-    layout();
+    layout(layout_mode);
 
     auto* line_box = &container.ensure_last_line_box();
     if (line_box->width() > 0 && line_box->width() + width() > container.width())

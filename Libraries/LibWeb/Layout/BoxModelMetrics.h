@@ -53,7 +53,7 @@ public:
         float left;
     };
 
-    PixelBox full_margin() const;
+    PixelBox full_margin(const LayoutNode&) const;
 
 private:
     LengthBox m_margin;

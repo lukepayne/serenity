@@ -97,6 +97,8 @@ TEST_CASE(ends_with)
     EXPECT(!test_string.ends_with('E'));
     EXPECT(test_string.ends_with("ABCDEF"));
     EXPECT(!test_string.ends_with("ABC"));
+    EXPECT(test_string.ends_with("def",  CaseSensitivity::CaseInsensitive));
+    EXPECT(!test_string.ends_with("def",  CaseSensitivity::CaseSensitive));
 }
 
 TEST_CASE(copy_string)
@@ -197,6 +199,15 @@ TEST_CASE(split)
     EXPECT_EQ(parts[0].characters()[3], '\0');
     EXPECT_EQ(parts[1].characters()[3], '\0');
     EXPECT_EQ(parts[2].characters()[3], '\0');
+}
+
+TEST_CASE(builder_zero_initial_capacity)
+{
+   StringBuilder builder(0);
+   builder.append("");
+   auto built = builder.build();
+   EXPECT_EQ(built.is_null(), false);
+   EXPECT_EQ(built.length(), 0u);
 }
 
 TEST_MAIN(String)

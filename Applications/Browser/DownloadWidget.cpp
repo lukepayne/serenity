@@ -30,6 +30,7 @@
 #include <AK/StringBuilder.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
+#include <LibDesktop/Launcher.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Label.h>
@@ -37,7 +38,7 @@
 #include <LibGUI/ProgressBar.h>
 #include <LibGUI/Window.h>
 #include <LibProtocol/Client.h>
-#include <LibWeb/ResourceLoader.h>
+#include <LibWeb/Loader/ResourceLoader.h>
 #include <math.h>
 
 namespace Browser {
@@ -128,10 +129,13 @@ DownloadWidget::~DownloadWidget()
 void DownloadWidget::did_progress(Optional<u32> total_size, u32 downloaded_size)
 {
     m_progress_bar->set_min(0);
-    if (total_size.has_value())
+    if (total_size.has_value()) {
+        int percent = roundf(((float)downloaded_size / (float)total_size.value()) * 100.0f);
+        window()->set_progress(percent);
         m_progress_bar->set_max(total_size.value());
-    else
+    } else {
         m_progress_bar->set_max(0);
+    }
     m_progress_bar->set_value(downloaded_size);
 
     {
@@ -162,8 +166,14 @@ void DownloadWidget::did_finish(bool success, const ByteBuffer& payload, RefPtr<
     (void)payload_storage;
     (void)response_headers;
     dbg() << "did_finish, success=" << success;
-    m_cancel_button->set_enabled(false);
+
     m_close_button->set_enabled(true);
+    m_cancel_button->set_text("Open in Folder");
+    m_cancel_button->on_click = [this](auto) {
+        Desktop::Launcher::open(URL::create_with_file_protocol(Core::StandardPaths::downloads_directory()));
+        window()->close();
+    };
+    m_cancel_button->update();
 
     if (!success) {
         GUI::MessageBox::show(String::format("Download failed for some reason"), "Download failed", GUI::MessageBox::Type::Error, GUI::MessageBox::InputType::OK, window());

@@ -57,10 +57,11 @@ BoundFunction* Function::bind(Value bound_this_value, Vector<Value> arguments)
         switch (bound_this_value.type()) {
         case Value::Type::Undefined:
         case Value::Type::Null:
-            // FIXME: Null or undefined should be passed through in strict mode.
+            if (interpreter().in_strict_mode())
+                return bound_this_value;
             return &interpreter().global_object();
         default:
-            return bound_this_value.to_object(interpreter().heap());
+            return bound_this_value.to_object(interpreter());
         }
     }();
 
@@ -69,7 +70,7 @@ BoundFunction* Function::bind(Value bound_this_value, Vector<Value> arguments)
     if (interpreter().exception())
         return nullptr;
     if (length_property.is_number())
-        computed_length = max(0, length_property.to_i32() - static_cast<i32>(arguments.size()));
+        computed_length = max(0, length_property.as_i32() - static_cast<i32>(arguments.size()));
 
     Object* constructor_prototype = nullptr;
     auto prototype_property = target_function.get("prototype");

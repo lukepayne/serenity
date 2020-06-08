@@ -49,7 +49,7 @@ public:
     const Widget* active_widget() const { return m_active_widget.ptr(); }
     void set_active_widget(Widget*);
 
-    int bar_height() const { return 21; }
+    int bar_height() const { return m_bar_visible ? 21 : 0; }
 
     int container_padding() const { return m_container_padding; }
     void set_container_padding(int padding) { m_container_padding = padding; }
@@ -79,8 +79,12 @@ public:
     void set_uniform_tabs(bool uniform_tabs) { m_uniform_tabs = uniform_tabs; }
     int uniform_tab_width() const;
 
+    void set_bar_visible(bool bar_visible);
+    bool is_bar_visible() const { return m_bar_visible; };
+
     Function<void(Widget&)> on_change;
     Function<void(Widget&)> on_middle_click;
+    Function<void(Widget&, const ContextMenuEvent&)> on_context_menu_request;
 
 protected:
     TabWidget();
@@ -92,6 +96,7 @@ protected:
     virtual void mousemove_event(MouseEvent&) override;
     virtual void leave_event(Core::Event&) override;
     virtual void keydown_event(KeyEvent&) override;
+    virtual void context_menu_event(ContextMenuEvent&) override;
 
 private:
     Gfx::Rect child_rect_for_size(const Gfx::Size&) const;
@@ -114,6 +119,7 @@ private:
     int m_container_padding { 2 };
     Gfx::TextAlignment m_text_alignment { Gfx::TextAlignment::Center };
     bool m_uniform_tabs { false };
+    bool m_bar_visible { true };
 };
 
 }

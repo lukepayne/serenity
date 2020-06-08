@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/StringBuilder.h>
 #include <AK/Utf8View.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/StyleSheet.h>
@@ -90,13 +91,25 @@ void dump_tree(const LayoutNode& layout_node)
     else
         tag_name = "???";
 
+    String identifier = "";
+    if (layout_node.node() && is<Element>(*layout_node.node())) {
+        auto id = to<Element>(*layout_node.node()).attribute(HTML::AttributeNames::id);
+        if (!id.is_empty()) {
+            StringBuilder builder;
+            builder.append('#');
+            builder.append(id);
+            identifier = builder.to_string();
+        }
+    }
+
     if (!layout_node.is_box()) {
-        dbgprintf("%s {%s}\n", layout_node.class_name(), tag_name.characters());
+        dbgprintf("%s {\033[33m%s\033[0m%s}\n", layout_node.class_name(), tag_name.characters(), identifier.characters());
     } else {
         auto& layout_box = to<LayoutBox>(layout_node);
-        dbgprintf("%s {%s} at (%g,%g) size %gx%g",
+        dbgprintf("%s {\033[34m%s\033[0m%s} at (%g,%g) size %gx%g",
             layout_box.class_name(),
             tag_name.characters(),
+            identifier.characters(),
             layout_box.x(),
             layout_box.y(),
             layout_box.width(),
@@ -104,23 +117,23 @@ void dump_tree(const LayoutNode& layout_node)
 
         // Dump the horizontal box properties
         dbgprintf(" [%g+%g+%g %g %g+%g+%g]",
-            layout_box.box_model().margin().left.to_px(),
-            layout_box.box_model().border().left.to_px(),
-            layout_box.box_model().padding().left.to_px(),
+            layout_box.box_model().margin().left.to_px(layout_box),
+            layout_box.box_model().border().left.to_px(layout_box),
+            layout_box.box_model().padding().left.to_px(layout_box),
             layout_box.width(),
-            layout_box.box_model().padding().right.to_px(),
-            layout_box.box_model().border().right.to_px(),
-            layout_box.box_model().margin().right.to_px());
+            layout_box.box_model().padding().right.to_px(layout_box),
+            layout_box.box_model().border().right.to_px(layout_box),
+            layout_box.box_model().margin().right.to_px(layout_box));
 
         // And the vertical box properties
         dbgprintf(" [%g+%g+%g %g %g+%g+%g]",
-            layout_box.box_model().margin().top.to_px(),
-            layout_box.box_model().border().top.to_px(),
-            layout_box.box_model().padding().top.to_px(),
+            layout_box.box_model().margin().top.to_px(layout_box),
+            layout_box.box_model().border().top.to_px(layout_box),
+            layout_box.box_model().padding().top.to_px(layout_box),
             layout_box.height(),
-            layout_box.box_model().padding().bottom.to_px(),
-            layout_box.box_model().border().bottom.to_px(),
-            layout_box.box_model().margin().bottom.to_px());
+            layout_box.box_model().padding().bottom.to_px(layout_box),
+            layout_box.box_model().border().bottom.to_px(layout_box),
+            layout_box.box_model().margin().bottom.to_px(layout_box));
 
         dbgprintf("\n");
     }

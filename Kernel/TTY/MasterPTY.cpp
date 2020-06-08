@@ -112,7 +112,7 @@ bool MasterPTY::can_write_from_slave() const
     return m_buffer.space_for_writing();
 }
 
-void MasterPTY::close()
+KResult MasterPTY::close()
 {
     if (ref_count() == 2) {
         InterruptDisabler disabler;
@@ -122,9 +122,11 @@ void MasterPTY::close()
 
         m_slave->hang_up();
     }
+
+    return KSuccess;
 }
 
-int MasterPTY::ioctl(FileDescription& description, unsigned request, unsigned arg)
+int MasterPTY::ioctl(FileDescription& description, unsigned request, FlatPtr arg)
 {
     REQUIRE_PROMISE(tty);
     if (!m_slave)

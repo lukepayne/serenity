@@ -24,7 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "Process.h"
+#include <Kernel/Process.h>
 #include <Kernel/TTY/TTY.h>
 #include <LibC/errno_numbers.h>
 #include <LibC/signal_numbers.h>
@@ -279,7 +279,7 @@ void TTY::set_termios(const termios& t)
 #endif
 }
 
-int TTY::ioctl(FileDescription&, unsigned request, unsigned arg)
+int TTY::ioctl(FileDescription&, unsigned request, FlatPtr arg)
 {
     REQUIRE_PROMISE(tty);
     auto& process = *Process::current;

@@ -58,6 +58,7 @@ private:
     static Value gc(Interpreter&);
     static Value is_nan(Interpreter&);
     static Value is_finite(Interpreter&);
+    static Value parse_float(Interpreter&);
 
     Shape* m_empty_object_shape { nullptr };
 
@@ -72,9 +73,9 @@ template<typename ConstructorType>
 inline void GlobalObject::add_constructor(const FlyString& property_name, ConstructorType*& constructor, Object& prototype)
 {
     constructor = heap().allocate<ConstructorType>();
-    constructor->put("name", js_string(heap(), property_name), Attribute::Configurable);
-    prototype.put("constructor", constructor);
-    put(property_name, constructor, Attribute::Writable | Attribute::Configurable);
+    constructor->define_property("name", js_string(heap(), property_name), Attribute::Configurable);
+    prototype.define_property("constructor", constructor, Attribute::Writable | Attribute::Configurable);
+    define_property(property_name, constructor, Attribute::Writable | Attribute::Configurable);
 }
 
 }

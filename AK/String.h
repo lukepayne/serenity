@@ -58,9 +58,9 @@ class String {
 public:
     using ConstIterator = const char*;
 
-    ~String() {}
+    ~String() { }
 
-    String() {}
+    String() { }
     String(const StringView&);
 
     String(const String& other)
@@ -114,7 +114,12 @@ public:
     String to_lowercase() const;
     String to_uppercase() const;
 
-    String trim_spaces() const;
+    enum class TrimMode {
+        Left,
+        Right,
+        Both
+    };
+    String trim_whitespace(TrimMode mode = TrimMode::Both) const;
 
     bool equals_ignoring_case(const StringView&) const;
 
@@ -129,10 +134,10 @@ public:
     StringView substring_view(size_t start, size_t length) const;
 
     bool is_null() const { return !m_impl; }
-    bool is_empty() const { return length() == 0; }
-    size_t length() const { return m_impl ? m_impl->length() : 0; }
-    const char* characters() const { return m_impl ? m_impl->characters() : nullptr; }
-    const char& operator[](size_t i) const
+    ALWAYS_INLINE bool is_empty() const { return length() == 0; }
+    ALWAYS_INLINE size_t length() const { return m_impl ? m_impl->length() : 0; }
+    ALWAYS_INLINE const char* characters() const { return m_impl ? m_impl->characters() : nullptr; }
+    ALWAYS_INLINE const char& operator[](size_t i) const
     {
         return (*m_impl)[i];
     }
@@ -141,7 +146,7 @@ public:
     ConstIterator end() const { return begin() + length(); }
 
     bool starts_with(const StringView&) const;
-    bool ends_with(const StringView&) const;
+    bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     bool starts_with(char) const;
     bool ends_with(char) const;
 
@@ -219,7 +224,17 @@ public:
 
     int replace(const String& needle, const String& replacement, bool all_occurences = false);
 
+    template<typename T, typename... Rest>
+    bool is_one_of(const T& string, Rest... rest) const
+    {
+        if (string == *this)
+            return true;
+        return is_one_of(rest...);
+    }
+
 private:
+    bool is_one_of() const { return false; }
+
     RefPtr<StringImpl> m_impl;
 };
 

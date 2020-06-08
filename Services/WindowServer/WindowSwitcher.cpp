@@ -27,6 +27,7 @@
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/StylePainter.h>
+#include <WindowServer/Compositor.h>
 #include <WindowServer/Event.h>
 #include <WindowServer/Screen.h>
 #include <WindowServer/WindowManager.h>
@@ -56,7 +57,7 @@ void WindowSwitcher::set_visible(bool visible)
     if (m_visible == visible)
         return;
     m_visible = visible;
-    WindowManager::the().recompute_occlusions();
+    Compositor::the().recompute_occlusions();
     if (m_switcher_window)
         m_switcher_window->set_visible(visible);
     if (!m_visible)
@@ -161,7 +162,7 @@ void WindowSwitcher::select_window_at_index(int index)
 void WindowSwitcher::redraw()
 {
     draw();
-    WindowManager::the().invalidate(m_rect);
+    Compositor::the().invalidate(m_rect);
 }
 
 Gfx::Rect WindowSwitcher::item_rect(int index) const
@@ -212,7 +213,7 @@ void WindowSwitcher::draw()
 void WindowSwitcher::refresh()
 {
     auto& wm = WindowManager::the();
-    Window* selected_window = nullptr;
+    const Window* selected_window = nullptr;
     if (m_selected_index > 0 && m_windows[m_selected_index])
         selected_window = m_windows[m_selected_index].ptr();
     if (!selected_window)

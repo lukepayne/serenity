@@ -38,8 +38,8 @@ namespace JS {
 FunctionConstructor::FunctionConstructor()
     : NativeFunction("Function", *interpreter().global_object().function_prototype())
 {
-    put("prototype", interpreter().global_object().function_prototype(), 0);
-    put("length", Value(1), Attribute::Configurable);
+    define_property("prototype", interpreter().global_object().function_prototype(), 0);
+    define_property("length", Value(1), Attribute::Configurable);
 }
 
 FunctionConstructor::~FunctionConstructor()
@@ -55,23 +55,32 @@ Value FunctionConstructor::construct(Interpreter& interpreter)
 {
     String parameters_source = "";
     String body_source = "";
-    if (interpreter.argument_count() == 1)
-        body_source = interpreter.argument(0).to_string();
+    if (interpreter.argument_count() == 1) {
+        body_source = interpreter.argument(0).to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
     if (interpreter.argument_count() > 1) {
         Vector<String> parameters;
-        for (size_t i = 0; i < interpreter.argument_count() - 1; ++i)
-            parameters.append(interpreter.argument(i).to_string());
+        for (size_t i = 0; i < interpreter.argument_count() - 1; ++i) {
+            parameters.append(interpreter.argument(i).to_string(interpreter));
+            if (interpreter.exception())
+                return {};
+        }
         StringBuilder parameters_builder;
         parameters_builder.join(',', parameters);
         parameters_source = parameters_builder.build();
-        body_source = interpreter.argument(interpreter.argument_count() - 1).to_string();
+        body_source = interpreter.argument(interpreter.argument_count() - 1).to_string(interpreter);
+        if (interpreter.exception())
+            return {};
     }
     auto source = String::format("function anonymous(%s) { %s }", parameters_source.characters(), body_source.characters());
     auto parser = Parser(Lexer(source));
     auto function_expression = parser.parse_function_node<FunctionExpression>();
     if (parser.has_errors()) {
-        // FIXME: The parser should expose parsing error strings rather than just fprintf()'ing them
-        return Error::create(interpreter.global_object(), "SyntaxError", "");
+        auto error = parser.errors()[0];
+        interpreter.throw_exception<SyntaxError>(error.to_string());
+        return {};
     }
     return function_expression->execute(interpreter);
 }

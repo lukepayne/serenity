@@ -72,7 +72,7 @@ int execlp(const char* filename, const char* arg, ...);
 int chroot(const char* path);
 int chroot_with_mount_flags(const char* path, int mount_flags);
 void sync();
-void _exit(int status);
+__attribute__((noreturn)) void _exit(int status);
 pid_t getsid(pid_t);
 pid_t setsid();
 int setpgid(pid_t pid, pid_t pgid);
@@ -113,7 +113,6 @@ int link(const char* oldpath, const char* newpath);
 int unlink(const char* pathname);
 int symlink(const char* target, const char* linkpath);
 int rmdir(const char* pathname);
-int getdtablesize();
 int dup(int old_fd);
 int dup2(int old_fd, int new_fd);
 int pipe(int pipefd[2]);
@@ -150,10 +149,12 @@ enum {
 #define X_OK 1
 #define F_OK 0
 
-#define MS_NODEV 1
-#define MS_NOEXEC 2
-#define MS_NOSUID 4
-#define MS_BIND 8
+#define MS_NODEV (1 << 0)
+#define MS_NOEXEC (1 << 1)
+#define MS_NOSUID (1 << 2)
+#define MS_BIND (1 << 3)
+#define MS_RDONLY (1 << 4)
+#define MS_REMOUNT (1 << 5)
 
 /*
  * We aren't fully compliant (don't support policies, and don't have a wide

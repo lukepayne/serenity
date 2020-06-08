@@ -71,13 +71,12 @@ private:
     explicit Editor();
 
     RefPtr<GUI::Window> m_documentation_tooltip_window;
-    RefPtr<Web::HtmlView> m_documentation_html_view;
+    RefPtr<Web::PageView> m_documentation_page_view;
     String m_last_parsed_token;
     GUI::TextPosition m_previous_text_position { 0, 0 };
     bool m_hovering_editor { false };
     bool m_hovering_link { false };
     bool m_holding_ctrl { false };
-    bool m_hovering_lines_ruler { false };
 
     Vector<size_t> m_breakpoint_lines;
     Optional<size_t> m_execution_position;

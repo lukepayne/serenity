@@ -25,13 +25,15 @@
  */
 
 #include "Window.h"
+#include "AppletManager.h"
 #include "ClientConnection.h"
+#include "Compositor.h"
 #include "Event.h"
 #include "EventLoop.h"
 #include "Screen.h"
-#include "WindowClientEndpoint.h"
 #include "WindowManager.h"
 #include <AK/Badge.h>
+#include <WindowServer/WindowClientEndpoint.h>
 
 namespace WindowServer {
 
@@ -302,14 +304,16 @@ void Window::event(Core::Event& event)
             Messages::WindowClient::KeyDown(m_window_id,
                 (u8) static_cast<const KeyEvent&>(event).character(),
                 (u32) static_cast<const KeyEvent&>(event).key(),
-                static_cast<const KeyEvent&>(event).modifiers()));
+                static_cast<const KeyEvent&>(event).modifiers(),
+                (u32) static_cast<const KeyEvent&>(event).scancode()));
         break;
     case Event::KeyUp:
         m_client->post_message(
             Messages::WindowClient::KeyUp(m_window_id,
                 (u8) static_cast<const KeyEvent&>(event).character(),
                 (u32) static_cast<const KeyEvent&>(event).key(),
-                static_cast<const KeyEvent&>(event).modifiers()));
+                static_cast<const KeyEvent&>(event).modifiers(),
+                (u32) static_cast<const KeyEvent&>(event).scancode()));
         break;
     case Event::WindowActivated:
         m_client->post_message(Messages::WindowClient::WindowActivated(m_window_id));
@@ -347,12 +351,26 @@ void Window::set_visible(bool b)
 
 void Window::invalidate()
 {
-    WindowManager::the().invalidate(*this);
+    Compositor::the().invalidate(frame().rect());
 }
 
 void Window::invalidate(const Gfx::Rect& rect)
 {
-    WindowManager::the().invalidate(*this, rect);
+    if (type() == WindowType::MenuApplet) {
+        AppletManager::the().invalidate_applet(*this, rect);
+        return;
+    }
+
+    if (rect.is_empty()) {
+        invalidate();
+        return;
+    }
+    auto outer_rect = frame().rect();
+    auto inner_rect = rect;
+    inner_rect.move_by(position());
+    // FIXME: This seems slightly wrong; the inner rect shouldn't intersect the border part of the outer rect.
+    inner_rect.intersect(outer_rect);
+    Compositor::the().invalidate(inner_rect);
 }
 
 bool Window::is_active() const
@@ -519,6 +537,15 @@ void Window::set_parent_window(Window& parent_window)
     ASSERT(!m_parent_window);
     m_parent_window = parent_window.make_weak_ptr();
     parent_window.add_child_window(*this);
+}
+
+void Window::set_progress(int progress)
+{
+    if (m_progress == progress)
+        return;
+
+    m_progress = progress;
+    WindowManager::the().notify_progress_changed(*this);
 }
 
 }

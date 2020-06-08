@@ -76,8 +76,9 @@ public:
     static void wake();
 
 private:
+    bool start_rpc_server();
     void wait_for_event(WaitMode);
-    void get_next_timer_expiration(timeval&);
+    Optional<struct timeval> get_next_timer_expiration();
 
     struct QueuedEvent {
         AK_MAKE_NONCOPYABLE(QueuedEvent);

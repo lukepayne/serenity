@@ -39,69 +39,62 @@ template<typename T>
 class RefPtr;
 
 template<typename T>
-inline void ref_if_not_null(T* ptr)
+ALWAYS_INLINE void ref_if_not_null(T* ptr)
 {
     if (ptr)
         ptr->ref();
 }
 
 template<typename T>
-inline void unref_if_not_null(T* ptr)
+ALWAYS_INLINE void unref_if_not_null(T* ptr)
 {
     if (ptr)
         ptr->unref();
 }
 
 template<typename T>
-class CONSUMABLE(unconsumed) NonnullRefPtr {
+class NonnullRefPtr {
 public:
     typedef T ElementType;
 
     enum AdoptTag { Adopt };
 
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(const T& object)
+    ALWAYS_INLINE NonnullRefPtr(const T& object)
         : m_ptr(const_cast<T*>(&object))
     {
         m_ptr->ref();
     }
     template<typename U>
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(const U& object)
+    ALWAYS_INLINE NonnullRefPtr(const U& object)
         : m_ptr(&const_cast<U&>(object))
     {
         m_ptr->ref();
     }
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(AdoptTag, T& object)
+    ALWAYS_INLINE NonnullRefPtr(AdoptTag, T& object)
         : m_ptr(&object)
     {
     }
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(NonnullRefPtr&& other)
+    ALWAYS_INLINE NonnullRefPtr(NonnullRefPtr&& other)
         : m_ptr(&other.leak_ref())
     {
     }
     template<typename U>
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(NonnullRefPtr<U>&& other)
+    ALWAYS_INLINE NonnullRefPtr(NonnullRefPtr<U>&& other)
         : m_ptr(&other.leak_ref())
     {
     }
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(const NonnullRefPtr& other)
+    ALWAYS_INLINE NonnullRefPtr(const NonnullRefPtr& other)
         : m_ptr(const_cast<T*>(other.ptr()))
     {
         m_ptr->ref();
     }
     template<typename U>
-    RETURN_TYPESTATE(unconsumed)
-    NonnullRefPtr(const NonnullRefPtr<U>& other)
+    ALWAYS_INLINE NonnullRefPtr(const NonnullRefPtr<U>& other)
         : m_ptr(const_cast<U*>(other.ptr()))
     {
         m_ptr->ref();
     }
-    ~NonnullRefPtr()
+    ALWAYS_INLINE ~NonnullRefPtr()
     {
         unref_if_not_null(m_ptr);
         m_ptr = nullptr;
@@ -140,7 +133,7 @@ public:
         return *this;
     }
 
-    NonnullRefPtr& operator=(NonnullRefPtr&& other)
+    ALWAYS_INLINE NonnullRefPtr& operator=(NonnullRefPtr&& other)
     {
         NonnullRefPtr ptr(move(other));
         swap(ptr);
@@ -162,74 +155,62 @@ public:
         return *this;
     }
 
-    [[nodiscard]] CALLABLE_WHEN(unconsumed)
-        SET_TYPESTATE(consumed)
-            T& leak_ref()
+    [[nodiscard]] ALWAYS_INLINE T& leak_ref()
     {
         ASSERT(m_ptr);
         return *exchange(m_ptr, nullptr);
     }
 
-    CALLABLE_WHEN("unconsumed", "unknown")
-    T* ptr()
+    ALWAYS_INLINE T* ptr()
     {
         ASSERT(m_ptr);
         return m_ptr;
     }
-    CALLABLE_WHEN("unconsumed", "unknown")
-    const T* ptr() const
-    {
-        ASSERT(m_ptr);
-        return m_ptr;
-    }
-
-    CALLABLE_WHEN(unconsumed)
-    T* operator->()
-    {
-        ASSERT(m_ptr);
-        return m_ptr;
-    }
-    CALLABLE_WHEN(unconsumed)
-    const T* operator->() const
+    ALWAYS_INLINE const T* ptr() const
     {
         ASSERT(m_ptr);
         return m_ptr;
     }
 
-    CALLABLE_WHEN(unconsumed)
-    T& operator*()
+    ALWAYS_INLINE T* operator->()
+    {
+        ASSERT(m_ptr);
+        return m_ptr;
+    }
+    ALWAYS_INLINE const T* operator->() const
+    {
+        ASSERT(m_ptr);
+        return m_ptr;
+    }
+
+    ALWAYS_INLINE T& operator*()
     {
         ASSERT(m_ptr);
         return *m_ptr;
     }
-    CALLABLE_WHEN(unconsumed)
-    const T& operator*() const
+    ALWAYS_INLINE const T& operator*() const
     {
         ASSERT(m_ptr);
         return *m_ptr;
     }
 
-    CALLABLE_WHEN(unconsumed)
-    operator T*()
+    ALWAYS_INLINE operator T*()
     {
         ASSERT(m_ptr);
         return m_ptr;
     }
-    CALLABLE_WHEN(unconsumed)
-    operator const T*() const
+    ALWAYS_INLINE operator const T*() const
     {
         ASSERT(m_ptr);
         return m_ptr;
     }
 
-    CALLABLE_WHEN(unconsumed)
-    operator T&()
+    ALWAYS_INLINE operator T&()
     {
         ASSERT(m_ptr);
         return *m_ptr;
     }
-    CALLABLE_WHEN(unconsumed)
-    operator const T&() const
+    ALWAYS_INLINE operator const T&() const
     {
         ASSERT(m_ptr);
         return *m_ptr;

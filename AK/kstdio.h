@@ -27,13 +27,13 @@
 #pragma once
 
 #ifdef __serenity__
-#    if defined(KERNEL) || defined(BOOTSTRAPPER)
-#        include <LibBareMetal/Output/kstdio.h>
+#    ifdef KERNEL
+#        include <Kernel/kstdio.h>
 #    else
 #        include <AK/Types.h>
 extern "C" {
 int dbgprintf(const char* fmt, ...);
-int dbgputstr(const char*, int);
+ssize_t dbgputstr(const char*, ssize_t);
 int sprintf(char* buf, const char* fmt, ...);
 }
 template<size_t N>

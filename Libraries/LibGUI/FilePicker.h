@@ -24,7 +24,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/FileSystemPath.h>
+#pragma once
+
+#include <AK/LexicalPath.h>
 #include <AK/Optional.h>
 #include <LibCore/StandardPaths.h>
 #include <LibGUI/Dialog.h>
@@ -45,10 +47,10 @@ public:
 
     virtual ~FilePicker() override;
 
-    FileSystemPath selected_file() const { return m_selected_file; }
+    LexicalPath selected_file() const { return m_selected_file; }
 
 private:
-    void set_preview(const FileSystemPath&);
+    void set_preview(const LexicalPath&);
     void clear_preview();
     void on_file_return();
 
@@ -68,7 +70,7 @@ private:
 
     RefPtr<MultiView> m_view;
     NonnullRefPtr<FileSystemModel> m_model;
-    FileSystemPath m_selected_file;
+    LexicalPath m_selected_file;
 
     RefPtr<TextBox> m_filename_textbox;
     RefPtr<Label> m_preview_image_label;

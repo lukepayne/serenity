@@ -39,12 +39,12 @@ namespace JS {
 ArrayConstructor::ArrayConstructor()
     : NativeFunction("Array", *interpreter().global_object().function_prototype())
 {
-    put("prototype", interpreter().global_object().array_prototype(), 0);
-    put("length", Value(1), Attribute::Configurable);
+    define_property("prototype", interpreter().global_object().array_prototype(), 0);
+    define_property("length", Value(1), Attribute::Configurable);
 
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("isArray", is_array, 1, attr);
-    put_native_function("of", of, 0, attr);
+    define_native_function("isArray", is_array, 1, attr);
+    define_native_function("of", of, 0, attr);
 }
 
 ArrayConstructor::~ArrayConstructor()
@@ -58,18 +58,18 @@ Value ArrayConstructor::call(Interpreter& interpreter)
 
     if (interpreter.argument_count() == 1 && interpreter.argument(0).is_number()) {
         auto array_length_value = interpreter.argument(0);
-        if (!array_length_value.is_integer() || array_length_value.to_i32() < 0) {
+        if (!array_length_value.is_integer() || array_length_value.as_i32() < 0) {
             interpreter.throw_exception<TypeError>("Invalid array length");
             return {};
         }
         auto* array = Array::create(interpreter.global_object());
-        array->elements().resize(array_length_value.to_i32());
+        array->indexed_properties().set_array_like_size(array_length_value.as_i32());
         return array;
     }
 
     auto* array = Array::create(interpreter.global_object());
     for (size_t i = 0; i < interpreter.argument_count(); ++i)
-        array->elements().append(interpreter.argument(i));
+        array->indexed_properties().append(interpreter.argument(i));
     return array;
 }
 
@@ -91,7 +91,7 @@ Value ArrayConstructor::of(Interpreter& interpreter)
 {
     auto* array = Array::create(interpreter.global_object());
     for (size_t i = 0; i < interpreter.argument_count(); ++i)
-        array->elements().append(interpreter.argument(i));
+        array->indexed_properties().append(interpreter.argument(i));
     return array;
 }
 

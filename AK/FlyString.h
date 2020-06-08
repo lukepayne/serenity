@@ -85,10 +85,22 @@ public:
     int to_int(bool& ok) const;
 
     bool equals_ignoring_case(const StringView&) const;
+    bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
 
     static void did_destroy_impl(Badge<StringImpl>, StringImpl&);
 
+    template<typename T, typename... Rest>
+    bool is_one_of(const T& string, Rest... rest) const
+    {
+        if (string == *this)
+            return true;
+        return is_one_of(rest...);
+    }
+
+
 private:
+    bool is_one_of() const { return false; }
+
     RefPtr<StringImpl> m_impl;
 };
 

@@ -209,10 +209,21 @@ void Window::set_override_cursor(StandardCursor cursor)
 {
     if (!is_visible())
         return;
-    if (m_override_cursor == cursor)
+    if (!m_custom_cursor && m_override_cursor == cursor)
         return;
     WindowServerConnection::the().send_sync<Messages::WindowServer::SetWindowOverrideCursor>(m_window_id, (u32)cursor);
     m_override_cursor = cursor;
+    m_custom_cursor = nullptr;
+}
+
+void Window::set_override_cursor(const Gfx::Bitmap& cursor)
+{
+    if (!is_visible())
+        return;
+    if (&cursor == m_custom_cursor.ptr())
+        return;
+    m_custom_cursor = &cursor;
+    WindowServerConnection::the().send_sync<Messages::WindowServer::SetWindowCustomOverrideCursor>(m_window_id, m_custom_cursor->to_shareable_bitmap(WindowServerConnection::the().server_pid()));
 }
 
 void Window::event(Core::Event& event)
@@ -750,7 +761,13 @@ void Window::set_size_increment(const Gfx::Size& size_increment)
         WindowServerConnection::the().send_sync<Messages::WindowServer::SetWindowBaseSizeAndSizeIncrement>(m_window_id, m_base_size, m_size_increment);
 }
 
-void Window::did_remove_widget(Badge<Widget>, const Widget& widget)
+void Window::did_add_widget(Badge<Widget>, Widget& widget)
+{
+    if (!m_focused_widget && widget.accepts_focus())
+        set_focused_widget(&widget);
+}
+
+void Window::did_remove_widget(Badge<Widget>, Widget& widget)
 {
     if (m_focused_widget == &widget)
         m_focused_widget = nullptr;
@@ -760,6 +777,12 @@ void Window::did_remove_widget(Badge<Widget>, const Widget& widget)
         m_global_cursor_tracking_widget = nullptr;
     if (m_automatic_cursor_tracking_widget == &widget)
         m_automatic_cursor_tracking_widget = nullptr;
+}
+
+void Window::set_progress(int progress)
+{
+    ASSERT(m_window_id);
+    WindowServerConnection::the().post_message(Messages::WindowServer::SetWindowProgress(m_window_id, progress));
 }
 
 }

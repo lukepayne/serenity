@@ -31,15 +31,13 @@
 #include <AK/Optional.h>
 #include <AK/RefCounted.h>
 #include <AK/URL.h>
-#include <AK/WeakPtr.h>
+#include <ProtocolServer/Forward.h>
 
-class PSClientConnection;
+namespace ProtocolServer {
 
-class Download : public RefCounted<Download> {
+class Download {
 public:
     virtual ~Download();
-
-    static Download* find_by_id(i32);
 
     i32 id() const { return m_id; }
     URL url() const { return m_url; }
@@ -52,7 +50,7 @@ public:
     void stop();
 
 protected:
-    explicit Download(PSClientConnection&);
+    explicit Download(ClientConnection&);
 
     void did_finish(bool success);
     void did_progress(Optional<u32> total_size, u32 downloaded_size);
@@ -60,11 +58,13 @@ protected:
     void set_response_headers(const HashMap<String, String, CaseInsensitiveStringTraits>&);
 
 private:
-    i32 m_id;
+    ClientConnection& m_client;
+    i32 m_id { 0 };
     URL m_url;
     Optional<u32> m_total_size {};
     size_t m_downloaded_size { 0 };
     ByteBuffer m_payload;
     HashMap<String, String, CaseInsensitiveStringTraits> m_response_headers;
-    WeakPtr<PSClientConnection> m_client;
 };
+
+}

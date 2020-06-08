@@ -50,3 +50,45 @@ function assertThrowsError(testFunction, options) {
     }
 }
 
+/**
+ * Ensures the provided JavaScript source code results in a SyntaxError
+ * @param {string} source The JavaScript source code to compile
+ */
+function assertIsSyntaxError(source) {
+    assertThrowsError(() => {
+        new Function(source)();
+    }, {
+        error: SyntaxError,
+    });
+}
+
+/**
+ * Ensures the provided arrays contain exactly the same items.
+ * @param {Array} a First array
+ * @param {Array} b Second array
+ */
+function assertArrayEquals(a, b) {
+    if (a.length != b.length)
+        throw new AssertionError("Array lengths do not match");
+    
+    for (var i = 0; i < a.length; i++) {
+        if (a[i] !== b[i])
+            throw new AssertionError("Elements do not match");
+    }
+}
+
+const assertVisitsAll = (testFunction, expectedOutput) => {
+    const visited = [];
+    testFunction(value => visited.push(value));
+    assert(visited.length === expectedOutput.length);
+    expectedOutput.forEach((value, i) => assert(visited[i] === value));
+};
+
+/**
+ * Check whether the difference between two numbers is less than 0.000001.
+ * @param {Number} a First number
+ * @param {Number} b Second number
+ */
+function isClose(a, b) {
+    return Math.abs(a - b) < 0.000001;
+}

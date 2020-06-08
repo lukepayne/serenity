@@ -18,7 +18,7 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 
 ## Screenshot
 
-![Screenshot as of 1133aca](https://raw.githubusercontent.com/SerenityOS/serenity/master/Meta/screenshot-1133aca.png)
+![Screenshot as of 8ea4375](https://raw.githubusercontent.com/SerenityOS/serenity/master/Meta/screenshot-8ea4375.png)
 
 ## Kernel features
 
@@ -81,6 +81,12 @@ I'm also on [Patreon](https://www.patreon.com/serenityos) and [GitHub Sponsors](
 * Various desktop apps & games
 * Color themes
 
+## How do I read the documentation?
+
+Man pages are browsable outside of SerenityOS under [Base/usr/share/man](https://github.com/SerenityOS/serenity/tree/master/Base/usr/share/man).
+
+When running SerenityOS you can use `man` for the terminal interface, or `help` for the GUI interface.
+
 ## How do I build and run this?
 
 See the [SerenityOS build instructions](https://github.com/SerenityOS/serenity/blob/master/Documentation/BuildInstructions.md)
@@ -103,8 +109,11 @@ Come hang out with us in `#serenityos` on the Freenode IRC network.
 * **Conrad Pankoff** - [deoxxa](https://github.com/deoxxa)
 * **Sergey Bugaev** - [bugaevc](https://github.com/bugaevc)
 * **Liav A** - [supercomputer7](https://github.com/supercomputer7)
+* **Linus Groh** - [linusg](https://github.com/linusg)
+* **Ali Mohammad Pur** - [alimpfard](https://github.com/alimpfard)
+* **Shannon Booth** - [shannonbooth](https://github.com/shannonbooth)
 
-(And many more!) Feel free to append yourself here if you've made some sweet contributions. :)
+(And many more!) The people listed above have landed more than 100 commits in the project. :^)
 
 ## License
 

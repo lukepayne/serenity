@@ -11,6 +11,17 @@ try {
     }
     assert(getB.bind("bar")() === "B");
 
+    // Bound functions should work with array functions
+    var Make3 = Number.bind(null, 3);
+    assert([55].map(Make3)[0] === 3);
+
+    var MakeTrue = Boolean.bind(null, true);
+    assert([1, 2, 3].filter(MakeTrue).length === 3);
+
+    assert([1, 2, 3].reduce((function (acc, x) { return acc + x }).bind(null, 4, 5)) === 9);
+
+    assert([1, 2, 3].reduce((function (acc, x) { return acc + x + this; }).bind(3)) === 12);
+
     function sum(a, b, c) {
         return a + b + c;
     }
@@ -92,19 +103,20 @@ try {
     assert(Make5() === 5);
     assert(new Make5().valueOf() === 5);
 
-    // FIXME: Uncomment me when strict mode is implemented
-    //     function strictIdentity() {
-    //         return this;
-    //     }
+    // Null or undefined should be passed through as a |this| value in strict mode.
+    (() => {
+      "use strict";
+      function strictIdentity() {
+        return this;
+      }
 
-    //     assert(strictIdentity.bind()() === undefined);
-    //     assert(strictIdentity.bind(null)() === null);
-    //     assert(strictIdentity.bind(undefined)() === undefined);
-    // })();
+      assert(strictIdentity.bind()() === undefined);
+      assert(strictIdentity.bind(null)() === null);
+      assert(strictIdentity.bind(undefined)() === undefined);
+    })();
 
-    // FIXME: Uncomment me when arrow functions have the correct |this| value.
-    // // Arrow functions can not have their |this| value set.
-    // assert((() => this).bind("foo")() === globalThis)
+    // Arrow functions can not have their |this| value set.
+    assert((() => this).bind("foo")() === globalThis)
 
     console.log("PASS");
 } catch (e) {

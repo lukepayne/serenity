@@ -27,8 +27,8 @@
 #include <AK/StringBuilder.h>
 #include <LibWeb/DOM/HTMLFormElement.h>
 #include <LibWeb/DOM/HTMLInputElement.h>
-#include <LibWeb/Frame.h>
-#include <LibWeb/HtmlView.h>
+#include <LibWeb/Frame/Frame.h>
+#include <LibWeb/PageView.h>
 #include <LibWeb/URLEncoder.h>
 
 namespace Web {
@@ -72,7 +72,7 @@ void HTMLFormElement::submit(RefPtr<HTMLInputElement> submitter)
     url.set_query(url_encode(parameters));
 
     // FIXME: We shouldn't let the form just do this willy-nilly.
-    document().frame()->html_view()->load(url);
+    document().frame()->page_view()->load(url);
 }
 
 }

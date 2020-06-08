@@ -166,13 +166,13 @@ public:
         return m_overflow;
     }
 
-    bool operator!() const
+    ALWAYS_INLINE bool operator!() const
     {
         ASSERT(!m_overflow);
         return !m_value;
     }
 
-    T value() const
+    ALWAYS_INLINE T value() const
     {
         ASSERT(!m_overflow);
         return m_value;
@@ -247,7 +247,7 @@ public:
 #endif
     }
 
-    template<typename U, typename V, typename X>
+    template<typename U, typename V>
     static bool multiplication_would_overflow(U u, V v)
     {
 #ifdef __clang__

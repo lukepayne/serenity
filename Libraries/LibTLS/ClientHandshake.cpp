@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <AK/Random.h>
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
@@ -87,8 +88,10 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
     if (session_length && session_length <= 32) {
         memcpy(m_context.session_id, buffer.offset_pointer(res), session_length);
         m_context.session_id_size = session_length;
+#ifdef TLS_DEBUG
         dbg() << "Remote session ID:";
         print_buffer(ByteBuffer::wrap(m_context.session_id, session_length));
+#endif
     } else {
         m_context.session_id_size = 0;
     }
@@ -106,7 +109,9 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
         return (i8)Error::NoCommonCipher;
     }
     m_context.cipher = cipher;
+#ifdef TLS_DEBUG
     dbg() << "Cipher: " << (u16)cipher;
+#endif
 
     // The handshake hash function is _always_ SHA256
     m_context.handshake_hash.initialize(Crypto::Hash::HashKind::SHA256);
@@ -140,7 +145,9 @@ ssize_t TLSv12::handle_hello(const ByteBuffer& buffer, WritePacketStage& write_p
         u16 extension_length = convert_between_host_and_network(*(const u16*)buffer.offset_pointer(res));
         res += 2;
 
+#ifdef TLS_DEBUG
         dbg() << "extension " << (u16)extension_type << " with length " << extension_length;
+#endif
         if (extension_length) {
             if (buffer.size() - res < extension_length) {
                 dbg() << "not enough data for extension";
@@ -212,18 +219,34 @@ ssize_t TLSv12::handle_finished(const ByteBuffer& buffer, WritePacketStage& writ
     index += 3;
 
     if (size < 12) {
+#ifdef TLS_DEBUG
         dbg() << "finished packet smaller than minimum size: " << size;
+#endif
         return (i8)Error::BrokenPacket;
     }
 
     if (size < buffer.size() - index) {
+#ifdef TLS_DEBUG
         dbg() << "not enough data after length: " << size << " > " << buffer.size() - index;
+#endif
         return (i8)Error::NeedMoreData;
     }
 
-    // TODO: Compare Hashes
+// TODO: Compare Hashes
+#ifdef TLS_DEBUG
     dbg() << "FIXME: handle_finished :: Check message validity";
+#endif
     m_context.connection_status = ConnectionStatus::Established;
+
+    if (m_handshake_timeout_timer) {
+        // Disable the handshake timeout timer as handshake has been established.
+        m_handshake_timeout_timer->stop();
+        m_handshake_timeout_timer->remove_from_parent();
+        m_handshake_timeout_timer = nullptr;
+    }
+
+    if (on_tls_ready_to_write)
+        on_tls_ready_to_write(*this);
 
     return handle_message(buffer);
 }
@@ -233,12 +256,13 @@ void TLSv12::build_random(PacketBuilder& builder)
     u8 random_bytes[48];
     size_t bytes = 48;
 
-    arc4random_buf(random_bytes, bytes);
+    AK::fill_with_random(random_bytes, bytes);
 
     // remove zeros from the random bytes
-    for (size_t i = 0; i < bytes; ++i)
+    for (size_t i = 0; i < bytes; ++i) {
         if (!random_bytes[i])
-            random_bytes[i--] = arc4random();
+            random_bytes[i--] = AK::get_random<u8>();
+    }
 
     if (m_context.is_server) {
         dbg() << "Server mode not supported";
@@ -279,7 +303,9 @@ void TLSv12::build_random(PacketBuilder& builder)
 ssize_t TLSv12::handle_payload(const ByteBuffer& vbuffer)
 {
     if (m_context.connection_status == ConnectionStatus::Established) {
+#ifdef TLS_DEBUG
         dbg() << "Renegotiation attempt ignored";
+#endif
         // FIXME: We should properly say "NoRenegotiation", but that causes a handshake failure
         //        so we just roll with it and pretend that we _did_ renegotiate
         //        This will cause issues when we decide to have long-lasting connections, but

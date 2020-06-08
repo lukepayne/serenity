@@ -100,7 +100,7 @@ bool JsonValue::equals(const JsonValue& other) const
     if (is_string() && other.is_string() && as_string() == other.as_string())
         return true;
 
-#if !defined(KERNEL) && !defined(BOOTSTRAPPER)
+#if !defined(KERNEL)
     if (is_number() && other.is_number() && to_number<double>() == other.to_number<double>()) {
         return true;
     }
@@ -129,27 +129,47 @@ bool JsonValue::equals(const JsonValue& other) const
     return false;
 }
 
-JsonValue::JsonValue(i32 value)
+JsonValue::JsonValue(int value)
     : m_type(Type::Int32)
 {
     m_value.as_i32 = value;
 }
 
-JsonValue::JsonValue(u32 value)
+JsonValue::JsonValue(unsigned value)
     : m_type(Type::UnsignedInt32)
 {
     m_value.as_u32 = value;
 }
 
-JsonValue::JsonValue(i64 value)
+JsonValue::JsonValue(long value)
+    : m_type(sizeof(long) == 8 ? Type::Int64 : Type::Int32)
+{
+    if constexpr (sizeof(long) == 8)
+        m_value.as_i64 = value;
+    else
+        m_value.as_i32 = value;
+}
+
+JsonValue::JsonValue(unsigned long value)
+    : m_type(sizeof(long) == 8 ? Type::UnsignedInt64 : Type::UnsignedInt32)
+{
+    if constexpr (sizeof(long) == 8)
+        m_value.as_u64 = value;
+    else
+        m_value.as_u32 = value;
+}
+
+JsonValue::JsonValue(long long value)
     : m_type(Type::Int64)
 {
+    static_assert(sizeof(long long unsigned) == 8);
     m_value.as_i64 = value;
 }
 
-JsonValue::JsonValue(u64 value)
+JsonValue::JsonValue(long long unsigned value)
     : m_type(Type::UnsignedInt64)
 {
+    static_assert(sizeof(long long unsigned) == 8);
     m_value.as_u64 = value;
 }
 
@@ -158,7 +178,7 @@ JsonValue::JsonValue(const char* cstring)
 {
 }
 
-#if !defined(BOOTSTRAPPER) && !defined(KERNEL)
+#if !defined(KERNEL)
 JsonValue::JsonValue(double value)
     : m_type(Type::Double)
 {

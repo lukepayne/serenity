@@ -28,30 +28,15 @@
 
 #include <AK/FlyString.h>
 #include <AK/String.h>
+#include <LibWeb/DOM/Attribute.h>
+#include <LibWeb/DOM/AttributeNames.h>
 #include <LibWeb/DOM/ParentNode.h>
+#include <LibWeb/DOM/TagNames.h>
 #include <LibWeb/Layout/LayoutNode.h>
 
 namespace Web {
 
 class LayoutNodeWithStyle;
-
-class Attribute {
-public:
-    Attribute(const FlyString& name, const String& value)
-        : m_name(name)
-        , m_value(value)
-    {
-    }
-
-    const FlyString& name() const { return m_name; }
-    const String& value() const { return m_value; }
-
-    void set_value(const String& value) { m_value = value; }
-
-private:
-    FlyString m_name;
-    String m_value;
-};
 
 class Element : public ParentNode {
 public:
@@ -75,9 +60,9 @@ public:
             callback(attribute.name(), attribute.value());
     }
 
-    bool has_class(const StringView&) const;
+    bool has_class(const FlyString&) const;
 
-    virtual void apply_presentational_hints(StyleProperties&) const {}
+    virtual void apply_presentational_hints(StyleProperties&) const { }
     virtual void parse_attribute(const FlyString& name, const String& value);
 
     void recompute_style();
@@ -85,7 +70,7 @@ public:
     LayoutNodeWithStyle* layout_node() { return static_cast<LayoutNodeWithStyle*>(Node::layout_node()); }
     const LayoutNodeWithStyle* layout_node() const { return static_cast<const LayoutNodeWithStyle*>(Node::layout_node()); }
 
-    String name() const { return attribute("name"); }
+    String name() const { return attribute(HTML::AttributeNames::name); }
 
     const StyleProperties* resolved_style() const { return m_resolved_style.ptr(); }
     NonnullRefPtr<StyleProperties> computed_style();
@@ -103,6 +88,8 @@ private:
     Vector<Attribute> m_attributes;
 
     RefPtr<StyleProperties> m_resolved_style;
+
+    Vector<FlyString> m_classes;
 };
 
 template<>

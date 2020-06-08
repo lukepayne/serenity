@@ -78,7 +78,7 @@ static NonnullRefPtr<GUI::Widget> build_graphs_tab();
 class UnavailableProcessWidget final : public GUI::Frame {
     C_OBJECT(UnavailableProcessWidget)
 public:
-    virtual ~UnavailableProcessWidget() override {}
+    virtual ~UnavailableProcessWidget() override { }
 
     const String& text() const { return m_text; }
     void set_text(String text) { m_text = move(text); }
@@ -285,7 +285,7 @@ int main(int argc, char** argv)
 
 class ProgressBarPaintingDelegate final : public GUI::TableCellPaintingDelegate {
 public:
-    virtual ~ProgressBarPaintingDelegate() override {}
+    virtual ~ProgressBarPaintingDelegate() override { }
 
     virtual void paint(GUI::Painter& painter, const Gfx::Rect& a_rect, const Palette& palette, const GUI::Model& model, const GUI::ModelIndex& index) override
     {
@@ -309,7 +309,6 @@ NonnullRefPtr<GUI::Widget> build_file_systems_tab()
         self.set_layout<GUI::VerticalBoxLayout>();
         self.layout()->set_margins({ 4, 4, 4, 4 });
         auto& fs_table_view = self.add<GUI::TableView>();
-        fs_table_view.set_size_columns_to_fit_content(true);
 
         Vector<GUI::JsonArrayModel::FieldSpec> df_fields;
         df_fields.empend("mount_point", "Mount point", Gfx::TextAlignment::CenterLeft);
@@ -358,7 +357,9 @@ NonnullRefPtr<GUI::Widget> build_file_systems_tab()
                 return object.get("free_block_count").to_u32() * object.get("block_size").to_u32();
             });
         df_fields.empend("Access", Gfx::TextAlignment::CenterLeft, [](const JsonObject& object) {
-            return object.get("readonly").to_bool() ? "Read-only" : "Read/Write";
+            bool readonly = object.get("readonly").to_bool();
+            int mount_flags = object.get("mount_flags").to_int();
+            return readonly || (mount_flags & MS_RDONLY) ? "Read-only" : "Read/Write";
         });
         df_fields.empend("Mount flags", Gfx::TextAlignment::CenterLeft, [](const JsonObject& object) {
             int mount_flags = object.get("mount_flags").to_int();
@@ -376,6 +377,7 @@ NonnullRefPtr<GUI::Widget> build_file_systems_tab()
             check(MS_NOEXEC, "noexec");
             check(MS_NOSUID, "nosuid");
             check(MS_BIND, "bind");
+            check(MS_RDONLY, "ro");
             if (builder.string_view().is_empty())
                 return String("defaults");
             return builder.to_string();
@@ -402,7 +404,6 @@ NonnullRefPtr<GUI::Widget> build_pci_devices_tab()
         self.set_layout<GUI::VerticalBoxLayout>();
         self.layout()->set_margins({ 4, 4, 4, 4 });
         auto& pci_table_view = self.add<GUI::TableView>();
-        pci_table_view.set_size_columns_to_fit_content(true);
 
         auto db = PCIDB::Database::open();
 
@@ -461,7 +462,6 @@ NonnullRefPtr<GUI::Widget> build_devices_tab()
         self.layout()->set_margins({ 4, 4, 4, 4 });
 
         auto& devices_table_view = self.add<GUI::TableView>();
-        devices_table_view.set_size_columns_to_fit_content(true);
         devices_table_view.set_model(GUI::SortingProxyModel::create(DevicesModel::create()));
         devices_table_view.model()->update();
     };

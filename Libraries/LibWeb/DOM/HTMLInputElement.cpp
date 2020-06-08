@@ -28,11 +28,12 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/TextBox.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/HTMLFormElement.h>
 #include <LibWeb/DOM/HTMLInputElement.h>
-#include <LibWeb/Frame.h>
-#include <LibWeb/HtmlView.h>
+#include <LibWeb/Frame/Frame.h>
 #include <LibWeb/Layout/LayoutWidget.h>
+#include <LibWeb/PageView.h>
 
 namespace Web {
 
@@ -49,15 +50,15 @@ RefPtr<LayoutNode> HTMLInputElement::create_layout_node(const StyleProperties*) 
 {
     ASSERT(document().frame());
     auto& frame = *document().frame();
-    ASSERT(frame.html_view());
-    auto& html_view = const_cast<HtmlView&>(*frame.html_view());
+    ASSERT(frame.page_view());
+    auto& page_view = const_cast<PageView&>(*frame.page_view());
 
     if (type() == "hidden")
         return nullptr;
 
     RefPtr<GUI::Widget> widget;
     if (type() == "submit") {
-        auto& button = html_view.add<GUI::Button>(value());
+        auto& button = page_view.add<GUI::Button>(value());
         int text_width = Gfx::Font::default_font().width(value());
         button.set_relative_rect(0, 0, text_width + 20, 20);
         button.on_click = [this](auto) {
@@ -67,15 +68,23 @@ RefPtr<LayoutNode> HTMLInputElement::create_layout_node(const StyleProperties*) 
             }
         };
         widget = button;
+    } else if (type() == "button") {
+        auto& button = page_view.add<GUI::Button>(value());
+        int text_width = Gfx::Font::default_font().width(value());
+        button.set_relative_rect(0, 0, text_width + 20, 20);
+        button.on_click = [this](auto) {
+            const_cast<HTMLInputElement*>(this)->dispatch_event(Event::create("click"));
+        };
+        widget = button;
     } else {
-        auto& text_box = html_view.add<GUI::TextBox>();
+        auto& text_box = page_view.add<GUI::TextBox>();
         text_box.set_text(value());
         text_box.on_change = [this] {
             auto& widget = to<LayoutWidget>(layout_node())->widget();
-            const_cast<HTMLInputElement*>(this)->set_attribute("value", static_cast<const GUI::TextBox&>(widget).text());
+            const_cast<HTMLInputElement*>(this)->set_attribute(HTML::AttributeNames::value, static_cast<const GUI::TextBox&>(widget).text());
         };
         int text_width = Gfx::Font::default_font().width(value());
-        auto size_value = attribute("size");
+        auto size_value = attribute(HTML::AttributeNames::size);
         if (!size_value.is_null()) {
             bool ok;
             auto size = size_value.to_int(ok);

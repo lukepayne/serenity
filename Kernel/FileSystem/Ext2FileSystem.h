@@ -59,7 +59,7 @@ private:
     // ^Inode
     virtual ssize_t read_bytes(off_t, ssize_t, u8* buffer, FileDescription*) const override;
     virtual InodeMetadata metadata() const override;
-    virtual bool traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const override;
+    virtual KResult traverse_as_directory(Function<bool(const FS::DirectoryEntry&)>) const override;
     virtual RefPtr<Inode> lookup(StringView name) override;
     virtual void flush_metadata() override;
     virtual ssize_t write_bytes(off_t, ssize_t, const u8* data, FileDescription*) override;
@@ -123,7 +123,7 @@ private:
     unsigned inode_size() const;
 
     bool write_ext2_inode(InodeIndex, const ext2_inode&);
-    bool read_block_containing_inode(InodeIndex inode, BlockIndex& block_index, unsigned& offset, u8* buffer) const;
+    bool find_block_containing_inode(InodeIndex inode, BlockIndex& block_index, unsigned& offset) const;
 
     bool flush_super_block();
 

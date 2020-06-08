@@ -28,6 +28,7 @@
 #include "InspectorWidget.h"
 #include "Tab.h"
 #include "WindowActions.h"
+#include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
 #include <LibGUI/AboutDialog.h>
@@ -36,7 +37,7 @@
 #include <LibGUI/TabWidget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
-#include <LibWeb/ResourceLoader.h>
+#include <LibWeb/Loader/ResourceLoader.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -44,6 +45,7 @@ namespace Browser {
 
 static const char* bookmarks_filename = "/home/anon/bookmarks.json";
 String g_home_url;
+bool g_use_old_html_parser = false;
 
 }
 
@@ -59,12 +61,20 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    const char* specified_url = nullptr;
+
+    Core::ArgsParser args_parser;
+    args_parser.add_option(Browser::g_use_old_html_parser, "Use old HTML parser", "old-parser", 'O');
+    args_parser.add_positional_argument(specified_url, "URL to open", "url", Core::ArgsParser::Required::No);
+    args_parser.parse(argc, argv);
+
     GUI::Application app(argc, argv);
 
     // Connect to the ProtocolServer immediately so we can drop the "unix" pledge.
     Web::ResourceLoader::the();
 
-    if (pledge("stdio shared_buffer accept cpath rpath wpath", nullptr) < 0) {
+    // FIXME: Once there is a standalone Download Manager, we can drop the "unix" pledge.
+    if (pledge("stdio shared_buffer accept unix cpath rpath wpath", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -80,6 +90,12 @@ int main(int argc, char** argv)
     }
 
     if (unveil("/etc/passwd", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    // FIXME: Once there is a standalone Download Manager, we don't need to unveil this
+    if (unveil("/tmp/portal/launch", "rw") < 0) {
         perror("unveil");
         return 1;
     }
@@ -121,12 +137,18 @@ int main(int argc, char** argv)
         tab.on_tab_close_request(tab);
     };
 
+    tab_widget.on_context_menu_request = [&](auto& clicked_widget, const GUI::ContextMenuEvent& context_menu_event) {
+        auto& tab = static_cast<Browser::Tab&>(clicked_widget);
+        tab.context_menu_requested(context_menu_event.screen_position());
+    };
+
     Browser::WindowActions window_actions(*window);
 
     Function<void(URL url, bool activate)> create_new_tab;
     create_new_tab = [&](auto url, auto activate) {
         auto& new_tab = tab_widget.add_tab<Browser::Tab>("New tab");
 
+        tab_widget.set_bar_visible(!window->is_fullscreen() && tab_widget.children().size() > 1);
         tab_widget.set_tab_icon(new_tab, default_favicon);
 
         new_tab.on_title_change = [&](auto title) {
@@ -146,6 +168,7 @@ int main(int argc, char** argv)
         new_tab.on_tab_close_request = [&](auto& tab) {
             tab_widget.deferred_invoke([&](auto&) {
                 tab_widget.remove_tab(tab);
+                tab_widget.set_bar_visible(!window->is_fullscreen() && tab_widget.children().size() > 1);
                 if (tab_widget.children().is_empty())
                     app.quit();
             });
@@ -160,8 +183,8 @@ int main(int argc, char** argv)
     };
 
     URL first_url = Browser::g_home_url;
-    if (app.args().size() >= 1)
-        first_url = URL::create_with_url_or_path(app.args()[0]);
+    if (specified_url)
+        first_url = URL::create_with_url_or_path(specified_url);
 
     window_actions.on_create_new_tab = [&] {
         create_new_tab(Browser::g_home_url, true);

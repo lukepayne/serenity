@@ -39,9 +39,9 @@ LayoutTableRow::~LayoutTableRow()
 {
 }
 
-void LayoutTableRow::layout()
+void LayoutTableRow::layout(LayoutMode layout_mode)
 {
-    LayoutBox::layout();
+    LayoutBox::layout(layout_mode);
 }
 
 LayoutTableCell* LayoutTableRow::first_cell()

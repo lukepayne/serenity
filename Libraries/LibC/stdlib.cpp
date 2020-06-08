@@ -208,7 +208,6 @@ void exit(int status)
     fflush(stdout);
     fflush(stderr);
     _exit(status);
-    ASSERT_NOT_REACHED();
 }
 
 static void __atexit_to_cxa_atexit(void* handler)
@@ -223,8 +222,11 @@ int atexit(void (*handler)())
 
 void abort()
 {
+    // For starters, send ourselves a SIGABRT.
     raise(SIGABRT);
-    ASSERT_NOT_REACHED();
+    // If that didn't kill us, try harder.
+    raise(SIGKILL);
+    _exit(127);
 }
 
 static HashTable<const char*> s_malloced_environment_variables;

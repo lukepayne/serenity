@@ -31,6 +31,7 @@
 #include <LibJS/Runtime/Function.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibWeb/Bindings/DocumentWrapper.h>
+#include <LibWeb/Bindings/LocationObject.h>
 #include <LibWeb/Bindings/NavigatorObject.h>
 #include <LibWeb/Bindings/WindowObject.h>
 #include <LibWeb/Bindings/XMLHttpRequestConstructor.h>
@@ -50,20 +51,21 @@ void WindowObject::initialize()
 {
     GlobalObject::initialize();
 
-    put("window", this, JS::Attribute::Enumerable);
-    put_native_property("document", document_getter, document_setter, JS::Attribute::Enumerable);
-    put_native_function("alert", alert);
-    put_native_function("confirm", confirm);
-    put_native_function("setInterval", set_interval, 1);
-    put_native_function("setTimeout", set_timeout, 1);
-    put_native_function("requestAnimationFrame", request_animation_frame, 1);
-    put_native_function("cancelAnimationFrame", cancel_animation_frame, 1);
+    define_property("window", this, JS::Attribute::Enumerable);
+    define_native_property("document", document_getter, document_setter, JS::Attribute::Enumerable);
+    define_native_function("alert", alert);
+    define_native_function("confirm", confirm);
+    define_native_function("setInterval", set_interval, 1);
+    define_native_function("setTimeout", set_timeout, 1);
+    define_native_function("requestAnimationFrame", request_animation_frame, 1);
+    define_native_function("cancelAnimationFrame", cancel_animation_frame, 1);
 
-    put("navigator", heap().allocate<NavigatorObject>(), JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_property("navigator", heap().allocate<NavigatorObject>(), JS::Attribute::Enumerable | JS::Attribute::Configurable);
+    define_property("location", heap().allocate<LocationObject>(), JS::Attribute::Enumerable | JS::Attribute::Configurable);
 
     m_xhr_prototype = heap().allocate<XMLHttpRequestPrototype>();
     m_xhr_constructor = heap().allocate<XMLHttpRequestConstructor>();
-    m_xhr_constructor->put("prototype", m_xhr_prototype, 0);
+    m_xhr_constructor->define_property("prototype", m_xhr_prototype, 0);
     add_constructor("XMLHttpRequest", m_xhr_constructor, *m_xhr_prototype);
 }
 
@@ -80,7 +82,7 @@ void WindowObject::visit_children(Visitor& visitor)
 
 static Window* impl_from(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object) {
         ASSERT_NOT_REACHED();
         return nullptr;
@@ -98,8 +100,11 @@ JS::Value WindowObject::alert(JS::Interpreter& interpreter)
     if (!impl)
         return {};
     String message = "";
-    if (interpreter.argument_count())
-        message = interpreter.argument(0).to_string();
+    if (interpreter.argument_count()) {
+        message = interpreter.argument(0).to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
     impl->alert(message);
     return JS::js_undefined();
 }
@@ -110,8 +115,11 @@ JS::Value WindowObject::confirm(JS::Interpreter& interpreter)
     if (!impl)
         return {};
     String message = "";
-    if (interpreter.argument_count())
-        message = interpreter.argument(0).to_string();
+    if (interpreter.argument_count()) {
+        message = interpreter.argument(0).to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
     return JS::Value(impl->confirm(message));
 }
 
@@ -120,15 +128,24 @@ JS::Value WindowObject::set_interval(JS::Interpreter& interpreter)
     auto* impl = impl_from(interpreter);
     if (!impl)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() < 2)
-        return {};
-    auto* callback_object = arguments[0].to_object(interpreter.heap());
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("setInterval() needs at least one argument");
+    auto* callback_object = interpreter.argument(0).to_object(interpreter);
     if (!callback_object)
         return {};
     if (!callback_object->is_function())
         return interpreter.throw_exception<JS::TypeError>("Not a function");
-    impl->set_interval(*static_cast<JS::Function*>(callback_object), arguments[1].to_i32());
+
+    i32 interval = 0;
+    if (interpreter.argument_count() >= 2) {
+        interval = interpreter.argument(1).to_i32(interpreter);
+        if (interpreter.exception())
+            return {};
+        if (interval < 0)
+            interval = 0;
+    }
+
+    impl->set_interval(*static_cast<JS::Function*>(callback_object), interval);
     return JS::js_undefined();
 }
 
@@ -137,18 +154,22 @@ JS::Value WindowObject::set_timeout(JS::Interpreter& interpreter)
     auto* impl = impl_from(interpreter);
     if (!impl)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() < 1)
-        return {};
-    auto* callback_object = arguments[0].to_object(interpreter.heap());
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("setTimeout() needs at least one argument");
+    auto* callback_object = interpreter.argument(0).to_object(interpreter);
     if (!callback_object)
         return {};
     if (!callback_object->is_function())
         return interpreter.throw_exception<JS::TypeError>("Not a function");
 
     i32 interval = 0;
-    if (interpreter.argument_count() >= 2)
-        interval = arguments[1].to_i32();
+    if (interpreter.argument_count() >= 2) {
+        interval = interpreter.argument(1).to_i32(interpreter);
+        if (interpreter.exception())
+            return {};
+        if (interval < 0)
+            interval = 0;
+    }
 
     impl->set_timeout(*static_cast<JS::Function*>(callback_object), interval);
     return JS::js_undefined();
@@ -159,10 +180,9 @@ JS::Value WindowObject::request_animation_frame(JS::Interpreter& interpreter)
     auto* impl = impl_from(interpreter);
     if (!impl)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() < 1)
-        return {};
-    auto* callback_object = arguments[0].to_object(interpreter.heap());
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("requestAnimationFrame() needs one argument");
+    auto* callback_object = interpreter.argument(0).to_object(interpreter);
     if (!callback_object)
         return {};
     if (!callback_object->is_function())
@@ -175,10 +195,12 @@ JS::Value WindowObject::cancel_animation_frame(JS::Interpreter& interpreter)
     auto* impl = impl_from(interpreter);
     if (!impl)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() < 1)
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("cancelAnimationFrame() needs one argument");
+    auto id = interpreter.argument(0).to_i32(interpreter);
+    if (interpreter.exception())
         return {};
-    impl->cancel_animation_frame(arguments[0].to_i32());
+    impl->cancel_animation_frame(id);
     return JS::js_undefined();
 }
 

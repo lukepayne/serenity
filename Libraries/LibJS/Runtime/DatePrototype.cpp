@@ -38,7 +38,7 @@ namespace JS {
 
 static Date* this_date_from_interpreter(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return nullptr;
     if (!this_object->is_date()) {
@@ -52,18 +52,18 @@ DatePrototype::DatePrototype()
     : Object(interpreter().global_object().object_prototype())
 {
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("getDate", get_date, 0, attr);
-    put_native_function("getDay", get_day, 0, attr);
-    put_native_function("getFullYear", get_full_year, 0, attr);
-    put_native_function("getHours", get_hours, 0, attr);
-    put_native_function("getMilliseconds", get_milliseconds, 0, attr);
-    put_native_function("getMinutes", get_minutes, 0, attr);
-    put_native_function("getMonth", get_month, 0, attr);
-    put_native_function("getSeconds", get_seconds, 0, attr);
-    put_native_function("getTime", get_time, 0, attr);
-    put_native_function("toDateString", to_date_string, 0, attr);
-    put_native_function("toTimeString", to_time_string, 0, attr);
-    put_native_function("toString", to_string, 0, attr);
+    define_native_function("getDate", get_date, 0, attr);
+    define_native_function("getDay", get_day, 0, attr);
+    define_native_function("getFullYear", get_full_year, 0, attr);
+    define_native_function("getHours", get_hours, 0, attr);
+    define_native_function("getMilliseconds", get_milliseconds, 0, attr);
+    define_native_function("getMinutes", get_minutes, 0, attr);
+    define_native_function("getMonth", get_month, 0, attr);
+    define_native_function("getSeconds", get_seconds, 0, attr);
+    define_native_function("getTime", get_time, 0, attr);
+    define_native_function("toDateString", to_date_string, 0, attr);
+    define_native_function("toTimeString", to_time_string, 0, attr);
+    define_native_function("toString", to_string, 0, attr);
 }
 
 DatePrototype::~DatePrototype()

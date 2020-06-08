@@ -64,7 +64,9 @@ static void prepare_arguments_list(Interpreter& interpreter, Value value, Marked
     auto length_property = arguments_list.get("length");
     if (interpreter.exception())
         return;
-    auto length = length_property.to_size_t();
+    auto length = length_property.to_size_t(interpreter);
+    if (interpreter.exception())
+        return;
     for (size_t i = 0; i < length; ++i) {
         auto element = arguments_list.get(String::number(i));
         if (interpreter.exception())
@@ -77,19 +79,19 @@ ReflectObject::ReflectObject()
     : Object(interpreter().global_object().object_prototype())
 {
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("apply", apply, 3, attr);
-    put_native_function("construct", construct, 2, attr);
-    put_native_function("defineProperty", define_property, 3, attr);
-    put_native_function("deleteProperty", delete_property, 2, attr);
-    put_native_function("get", get, 2, attr);
-    put_native_function("getOwnPropertyDescriptor", get_own_property_descriptor, 2, attr);
-    put_native_function("getPrototypeOf", get_prototype_of, 1, attr);
-    put_native_function("has", has, 2, attr);
-    put_native_function("isExtensible", is_extensible, 1, attr);
-    put_native_function("ownKeys", own_keys, 1, attr);
-    put_native_function("preventExtensions", prevent_extensions, 1, attr);
-    put_native_function("set", set, 3, attr);
-    put_native_function("setPrototypeOf", set_prototype_of, 2, attr);
+    define_native_function("apply", apply, 3, attr);
+    define_native_function("construct", construct, 2, attr);
+    define_native_function("defineProperty", define_property, 3, attr);
+    define_native_function("deleteProperty", delete_property, 2, attr);
+    define_native_function("get", get, 2, attr);
+    define_native_function("getOwnPropertyDescriptor", get_own_property_descriptor, 2, attr);
+    define_native_function("getPrototypeOf", get_prototype_of, 1, attr);
+    define_native_function("has", has, 2, attr);
+    define_native_function("isExtensible", is_extensible, 1, attr);
+    define_native_function("ownKeys", own_keys, 1, attr);
+    define_native_function("preventExtensions", prevent_extensions, 1, attr);
+    define_native_function("set", set, 3, attr);
+    define_native_function("setPrototypeOf", set_prototype_of, 2, attr);
 }
 
 ReflectObject::~ReflectObject()
@@ -138,7 +140,9 @@ Value ReflectObject::define_property(Interpreter& interpreter)
         return {};
     if (!interpreter.argument(2).is_object())
         return interpreter.throw_exception<TypeError>("Descriptor argument is not an object");
-    auto property_key = interpreter.argument(1).to_string();
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     auto& descriptor = interpreter.argument(2).as_object();
     auto success = target->define_property(property_key, descriptor, false);
     return Value(success);
@@ -151,13 +155,18 @@ Value ReflectObject::delete_property(Interpreter& interpreter)
         return {};
 
     auto property_key = interpreter.argument(1);
-    PropertyName property = PropertyName(property_key.to_string());
-    if (property_key.to_number().is_finite_number()) {
-        auto property_key_as_double = property_key.to_double();
+    auto property_name = PropertyName(property_key.to_string(interpreter));
+    if (interpreter.exception())
+        return {};
+    auto property_key_number = property_key.to_number(interpreter);
+    if (interpreter.exception())
+        return {};
+    if (property_key_number.is_finite_number()) {
+        auto property_key_as_double = property_key_number.as_double();
         if (property_key_as_double >= 0 && (i32)property_key_as_double == property_key_as_double)
-            property = PropertyName(property_key_as_double);
+            property_name = PropertyName(property_key_as_double);
     }
-    return target->delete_property(property);
+    return target->delete_property(property_name);
 }
 
 Value ReflectObject::get(Interpreter& interpreter)
@@ -166,7 +175,9 @@ Value ReflectObject::get(Interpreter& interpreter)
     auto* target = get_target_object_from(interpreter, "get");
     if (!target)
         return {};
-    auto property_key = interpreter.argument(1).to_string();
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     return target->get(property_key).value_or(js_undefined());
 }
 
@@ -175,8 +186,10 @@ Value ReflectObject::get_own_property_descriptor(Interpreter& interpreter)
     auto* target = get_target_object_from(interpreter, "getOwnPropertyDescriptor");
     if (!target)
         return {};
-    auto property_key = interpreter.argument(1).to_string();
-    return target->get_own_property_descriptor(property_key);
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    return target->get_own_property_descriptor_object(property_key);
 }
 
 Value ReflectObject::get_prototype_of(Interpreter& interpreter)
@@ -192,16 +205,18 @@ Value ReflectObject::has(Interpreter& interpreter)
     auto* target = get_target_object_from(interpreter, "has");
     if (!target)
         return {};
-    auto property_key = interpreter.argument(1).to_string();
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     return Value(target->has_property(property_key));
 }
 
-Value ReflectObject::is_extensible(Interpreter&)
+Value ReflectObject::is_extensible(Interpreter& interpreter)
 {
-    // FIXME: For this to be useful we need one of these:
-    // Object.seal(), Object.freeze(), Reflect.preventExtensions()
-    // For now we just return true, as that's always the case.
-    return Value(true);
+    auto* target = get_target_object_from(interpreter, "isExtensible");
+    if (!target)
+        return {};
+    return Value(target->is_extensible());
 }
 
 Value ReflectObject::own_keys(Interpreter& interpreter)
@@ -212,10 +227,12 @@ Value ReflectObject::own_keys(Interpreter& interpreter)
     return target->get_own_properties(*target, GetOwnPropertyMode::Key);
 }
 
-Value ReflectObject::prevent_extensions(Interpreter&)
+Value ReflectObject::prevent_extensions(Interpreter& interpreter)
 {
-    // FIXME: Implement me :^)
-    ASSERT_NOT_REACHED();
+    auto* target = get_target_object_from(interpreter, "preventExtensions");
+    if (!target)
+        return {};
+    return Value(target->prevent_extensions());
 }
 
 Value ReflectObject::set(Interpreter& interpreter)
@@ -224,7 +241,9 @@ Value ReflectObject::set(Interpreter& interpreter)
     auto* target = get_target_object_from(interpreter, "set");
     if (!target)
         return {};
-    auto property_key = interpreter.argument(1).to_string();
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     auto value = interpreter.argument(2);
     return Value(target->put(property_key, value));
 }
@@ -242,9 +261,7 @@ Value ReflectObject::set_prototype_of(Interpreter& interpreter)
     Object* prototype = nullptr;
     if (!prototype_value.is_null())
         prototype = const_cast<Object*>(&prototype_value.as_object());
-    target->set_prototype(prototype);
-    // FIXME: Needs to return false for prototype chain cycles and non-extensible objects (don't have those yet).
-    return Value(true);
+    return Value(target->set_prototype(prototype));
 }
 
 }

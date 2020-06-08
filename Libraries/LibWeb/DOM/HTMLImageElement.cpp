@@ -32,7 +32,7 @@
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/HTMLImageElement.h>
 #include <LibWeb/Layout/LayoutImage.h>
-#include <LibWeb/ResourceLoader.h>
+#include <LibWeb/Loader/ResourceLoader.h>
 
 namespace Web {
 
@@ -48,37 +48,53 @@ HTMLImageElement::~HTMLImageElement()
 
 void HTMLImageElement::parse_attribute(const FlyString& name, const String& value)
 {
+    HTMLElement::parse_attribute(name, value);
     if (name.equals_ignoring_case("src"))
         load_image(value);
 }
 
 void HTMLImageElement::load_image(const String& src)
 {
-    URL src_url = document().complete_url(src);
-    ResourceLoader::the().load(src_url, [this, weak_element = make_weak_ptr()](auto data, auto&) {
-        if (!weak_element) {
-            dbg() << "HTMLImageElement: Load completed after element destroyed.";
-            return;
-        }
-        if (data.is_null()) {
-            dbg() << "HTMLImageElement: Failed to load " << this->src();
-            return;
-        }
+    LoadRequest request;
+    request.set_url(document().complete_url(src));
+    set_resource(ResourceLoader::the().load_resource(Resource::Type::Image, request));
+}
 
-        m_encoded_data = data;
-        m_image_decoder = Gfx::ImageDecoder::create(m_encoded_data.data(), m_encoded_data.size());
+void HTMLImageElement::resource_did_load()
+{
+    ASSERT(resource());
 
-        if (m_image_decoder->is_animated() && m_image_decoder->frame_count() > 1) {
-            const auto& first_frame = m_image_decoder->frame(0);
-            m_timer->set_interval(first_frame.duration);
-            m_timer->on_timeout = [this] { animate(); };
-            m_timer->start();
-        }
+    if (!resource()->has_encoded_data()) {
+        dbg() << "HTMLImageElement: Resource did load, but encoded data empty: " << this->src();
+        return;
+    }
 
-        document().update_layout();
+    dbg() << "HTMLImageElement: Resource did load, encoded data looks tasty: " << this->src();
 
-        dispatch_event(Event::create("load"));
-    });
+    m_image_decoder = resource()->ensure_decoder();
+
+    if (m_image_decoder->is_animated() && m_image_decoder->frame_count() > 1) {
+        const auto& first_frame = m_image_decoder->frame(0);
+        m_timer->set_interval(first_frame.duration);
+        m_timer->on_timeout = [this] { animate(); };
+        m_timer->start();
+    }
+
+    document().update_layout();
+    dispatch_event(Event::create("load"));
+}
+
+void HTMLImageElement::resource_did_fail()
+{
+    dbg() << "HTMLImageElement: Resource did fail: " << this->src();
+    m_image_decoder = nullptr;
+    document().update_layout();
+    dispatch_event(Event::create("error"));
+}
+
+void HTMLImageElement::resource_did_replace_decoder()
+{
+    m_image_decoder = resource()->ensure_decoder();
 }
 
 void HTMLImageElement::animate()
@@ -107,7 +123,7 @@ void HTMLImageElement::animate()
 int HTMLImageElement::preferred_width() const
 {
     bool ok = false;
-    int width = attribute("width").to_int(ok);
+    int width = attribute(HTML::AttributeNames::width).to_int(ok);
     if (ok)
         return width;
 
@@ -120,7 +136,7 @@ int HTMLImageElement::preferred_width() const
 int HTMLImageElement::preferred_height() const
 {
     bool ok = false;
-    int height = attribute("height").to_int(ok);
+    int height = attribute(HTML::AttributeNames::height).to_int(ok);
     if (ok)
         return height;
 
@@ -151,18 +167,17 @@ const Gfx::Bitmap* HTMLImageElement::bitmap() const
     return m_image_decoder->bitmap();
 }
 
-void HTMLImageElement::set_volatile(Badge<LayoutDocument>, bool v)
+void HTMLImageElement::set_visible_in_viewport(Badge<LayoutDocument>, bool visible_in_viewport)
 {
-    if (!m_image_decoder)
+    if (m_visible_in_viewport == visible_in_viewport)
         return;
-    if (v) {
-        m_image_decoder->set_volatile();
-        return;
-    }
-    bool has_image = m_image_decoder->set_nonvolatile();
-    if (has_image)
-        return;
-    m_image_decoder = Gfx::ImageDecoder::create(m_encoded_data.data(), m_encoded_data.size());
+    m_visible_in_viewport = visible_in_viewport;
+
+    // FIXME: Don't update volatility every time. If we're here, we're probably scanning through
+    //        the whole document, updating "is visible in viewport" flags, and this could lead
+    //        to the same bitmap being marked volatile back and forth unnecessarily.
+    if (resource())
+        resource()->update_volatility();
 }
 
 }

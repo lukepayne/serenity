@@ -30,7 +30,7 @@
 #include <Kernel/Thread.h>
 #include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
-#include <LibBareMetal/IO.h>
+#include <Kernel/IO.h>
 
 //#define SB16_DEBUG
 
@@ -100,7 +100,7 @@ void SB16::initialize()
     disable_irq();
 
     IO::out8(0x226, 1);
-    IO::delay();
+    IO::delay(32);
     IO::out8(0x226, 0);
 
     auto data = dsp_read();
@@ -181,7 +181,7 @@ void SB16::dma_start(uint32_t length)
 {
     const auto addr = m_dma_region->physical_page(0)->paddr().get();
     const u8 channel = 5; // 16-bit samples use DMA channel 5 (on the master DMA controller)
-    const u8 mode = 0;
+    const u8 mode = 0x48;
 
     // Disable the DMA channel
     IO::out8(0xd4, 4 + (channel % 4));

@@ -40,11 +40,13 @@ LayoutImage::~LayoutImage()
 {
 }
 
-void LayoutImage::layout()
+void LayoutImage::layout(LayoutMode layout_mode)
 {
     if (node().preferred_width() && node().preferred_height()) {
-        rect().set_width(node().preferred_width());
-        rect().set_height(node().preferred_height());
+        set_has_intrinsic_width(true);
+        set_has_intrinsic_height(true);
+        set_intrinsic_width(node().preferred_width());
+        set_intrinsic_height(node().preferred_height());
     } else if (renders_as_alt_text()) {
         auto& font = Gfx::Font::default_font();
         auto alt = node().alt();
@@ -57,7 +59,7 @@ void LayoutImage::layout()
         rect().set_height(16);
     }
 
-    LayoutReplaced::layout();
+    LayoutReplaced::layout(layout_mode);
 }
 
 void LayoutImage::render(RenderingContext& context)

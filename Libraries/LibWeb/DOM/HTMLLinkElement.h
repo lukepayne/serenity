@@ -27,25 +27,37 @@
 #pragma once
 
 #include <LibWeb/DOM/HTMLElement.h>
+#include <LibWeb/Loader/Resource.h>
 
 namespace Web {
 
-class HTMLLinkElement final : public HTMLElement {
+class HTMLLinkElement final
+    : public HTMLElement
+    , public ResourceClient {
 public:
     HTMLLinkElement(Document&, const FlyString& tag_name);
     virtual ~HTMLLinkElement() override;
 
     virtual void inserted_into(Node&) override;
 
-    String rel() const { return attribute("rel"); }
-    String type() const { return attribute("type"); }
-    String href() const { return attribute("href"); }
+    String rel() const { return attribute(HTML::AttributeNames::rel); }
+    String type() const { return attribute(HTML::AttributeNames::type); }
+    String href() const { return attribute(HTML::AttributeNames::href); }
+
+private:
+    // ^ResourceClient
+    virtual void resource_did_fail() override;
+    virtual void resource_did_load() override;
+
+    void load_stylesheet(const URL&);
+
+    RefPtr<StyleSheet> m_style_sheet;
 };
 
 template<>
 inline bool is<HTMLLinkElement>(const Node& node)
 {
-    return is<Element>(node) && to<Element>(node).tag_name().equals_ignoring_case("link");
+    return is<Element>(node) && to<Element>(node).tag_name() == HTML::TagNames::link;
 }
 
 }

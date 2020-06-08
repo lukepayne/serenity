@@ -24,11 +24,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <LibC/limits.h>
+#include <AK/Random.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/File.h>
 #include <LibCrypto/Authentication/HMAC.h>
+#include <LibCrypto/BigInt/SignedBigInteger.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 #include <LibCrypto/Cipher/AES.h>
 #include <LibCrypto/Hash/MD5.h>
@@ -37,6 +38,7 @@
 #include <LibCrypto/PK/RSA.h>
 #include <LibLine/Editor.h>
 #include <LibTLS/TLSv12.h>
+#include <limits.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -49,18 +51,19 @@ static bool binary = false;
 static bool interactive = false;
 static bool run_tests = false;
 static int port = 443;
+static bool in_ci = false;
 
 static struct timeval start_time {
     0, 0
 };
 static struct timezone tz;
+static bool g_some_test_failed = false;
 static bool encrypting = true;
 
 constexpr const char* DEFAULT_DIGEST_SUITE { "HMAC-SHA256" };
 constexpr const char* DEFAULT_HASH_SUITE { "SHA256" };
 constexpr const char* DEFAULT_CIPHER_SUITE { "AES_CBC" };
 constexpr const char* DEFAULT_SERVER { "www.google.com" };
-constexpr int DEFAULT_PORT { 443 };
 
 // listAllTests
 // Cipher
@@ -110,10 +113,15 @@ Core::EventLoop loop;
 int run(Function<void(const char*, size_t)> fn)
 {
     if (interactive) {
-        Line::Editor editor;
-        editor.initialize();
+        auto editor = Line::Editor::construct();
+        editor->initialize();
         for (;;) {
-            auto line = editor.get_line("> ");
+            auto line_result = editor->get_line("> ");
+
+            if (line_result.is_error())
+                break;
+            auto& line = line_result.value();
+
             if (line == ".wait") {
                 loop.exec();
             } else {
@@ -144,10 +152,10 @@ int run(Function<void(const char*, size_t)> fn)
 
 void tls(const char* message, size_t len)
 {
-    static OwnPtr<TLS::TLSv12> tls;
+    static RefPtr<TLS::TLSv12> tls;
     static ByteBuffer write {};
     if (!tls) {
-        tls = make<TLS::TLSv12>(nullptr);
+        tls = TLS::TLSv12::construct(nullptr);
         tls->connect(server ?: DEFAULT_SERVER, port);
         tls->on_tls_ready_to_read = [](auto& tls) {
             auto buffer = tls.read();
@@ -276,6 +284,7 @@ auto main(int argc, char** argv) -> int
     parser.add_option(suite, "Set the suite used", "suite-name", 'n', "suite name");
     parser.add_option(server, "Set the server to talk to (only for `tls')", "server-address", 's', "server-address");
     parser.add_option(port, "Set the port to talk to (only for `tls')", "port", 'p', "port");
+    parser.add_option(in_ci, "CI Test mode", "ci-mode", 'c');
     parser.parse(argc, argv);
 
     StringView mode_sv { mode };
@@ -374,11 +383,14 @@ auto main(int argc, char** argv) -> int
 
         rsa_tests();
 
-        tls_tests();
+        if (!in_ci) {
+            // Do not run these in CI to avoid tests with variables outside our control.
+            tls_tests();
+        }
 
         bigint_tests();
 
-        return 0;
+        return g_some_test_failed ? 1 : 0;
     }
     encrypting = mode_sv == "encrypt";
     if (encrypting || mode_sv == "decrypt") {
@@ -414,22 +426,26 @@ auto main(int argc, char** argv) -> int
         fflush(stdout);                   \
         gettimeofday(&start_time, &tz);   \
     }
-#define PASS                                                     \
-    {                                                            \
-        struct timeval end_time {                                \
-            0, 0                                                 \
-        };                                                       \
-        gettimeofday(&end_time, &tz);                            \
-        time_t interval_s = end_time.tv_sec - start_time.tv_sec; \
-        suseconds_t interval_us = end_time.tv_usec;              \
-        if (interval_us < start_time.tv_usec) {                  \
-            interval_s -= 1;                                     \
-            interval_us += 1000000;                              \
-        }                                                        \
-        interval_us -= start_time.tv_usec;                       \
-        printf("PASS %llds %dus\n", interval_s, interval_us);    \
+#define PASS                                                                          \
+    {                                                                                 \
+        struct timeval end_time {                                                     \
+            0, 0                                                                      \
+        };                                                                            \
+        gettimeofday(&end_time, &tz);                                                 \
+        time_t interval_s = end_time.tv_sec - start_time.tv_sec;                      \
+        suseconds_t interval_us = end_time.tv_usec;                                   \
+        if (interval_us < start_time.tv_usec) {                                       \
+            interval_s -= 1;                                                          \
+            interval_us += 1000000;                                                   \
+        }                                                                             \
+        interval_us -= start_time.tv_usec;                                            \
+        printf("PASS %llds %lldus\n", (long long)interval_s, (long long)interval_us); \
     }
-#define FAIL(reason) printf("FAIL: " #reason "\n")
+#define FAIL(reason)                   \
+    do {                               \
+        printf("FAIL: " #reason "\n"); \
+        g_some_test_failed = true;     \
+    } while (0)
 
 ByteBuffer operator""_b(const char* string, size_t length)
 {
@@ -480,6 +496,16 @@ void bigint_multiplication();
 void bigint_division();
 void bigint_base10();
 void bigint_import_export();
+void bigint_bitwise();
+
+void bigint_test_signed_fibo500();
+void bigint_signed_addition_edgecases();
+void bigint_signed_subtraction();
+void bigint_signed_multiplication();
+void bigint_signed_division();
+void bigint_signed_base10();
+void bigint_signed_import_export();
+void bigint_signed_bitwise();
 
 int aes_cbc_tests()
 {
@@ -490,7 +516,7 @@ int aes_cbc_tests()
         aes_cbc_test_decrypt();
     }
 
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void aes_cbc_test_name()
@@ -623,7 +649,7 @@ int md5_tests()
     md5_test_name();
     md5_test_hash();
     md5_test_consecutive_updates();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void md5_test_name()
@@ -755,21 +781,21 @@ int hmac_md5_tests()
 {
     hmac_md5_test_name();
     hmac_md5_test_process();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 int hmac_sha256_tests()
 {
     hmac_sha256_test_name();
     hmac_sha256_test_process();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 int hmac_sha512_tests()
 {
     hmac_sha512_test_name();
     hmac_sha512_test_process();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void hmac_md5_test_name()
@@ -815,7 +841,7 @@ int sha1_tests()
 {
     sha1_test_name();
     sha1_test_hash();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void sha1_test_name()
@@ -887,7 +913,7 @@ int sha256_tests()
 {
     sha256_test_name();
     sha256_test_hash();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void sha256_test_name()
@@ -955,6 +981,32 @@ void hmac_sha256_test_process()
             PASS;
     }
     {
+        I_TEST((HMAC - SHA256 | DataSize > FinalBlockDataSize));
+        Crypto::Authentication::HMAC<Crypto::Hash::SHA256> hmac("Well Hello Friends");
+        u8 result[] = {
+            0x9b, 0xa3, 0x9e, 0xf3, 0xb4, 0x30, 0x5f, 0x6f, 0x67, 0xd0, 0xa8, 0xb0, 0xf0, 0xcb, 0x12, 0xf5, 0x85, 0xe2, 0x19, 0xba, 0x0c, 0x8b, 0xe5, 0x43, 0xf0, 0x93, 0x39, 0xa8, 0xa3, 0x07, 0xf1, 0x95
+        };
+        auto mac = hmac.process("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        if (memcmp(result, mac.data, hmac.digest_size()) != 0) {
+            FAIL(Invalid mac);
+            print_buffer(ByteBuffer::wrap(mac.data, hmac.digest_size()), -1);
+        } else
+            PASS;
+    }
+    {
+        I_TEST((HMAC - SHA256 | DataSize == BlockSize));
+        Crypto::Authentication::HMAC<Crypto::Hash::SHA256> hmac("Well Hello Friends");
+        u8 result[] = {
+            0x1d, 0x90, 0xce, 0x68, 0x45, 0x0b, 0xba, 0xd6, 0xbe, 0x1c, 0xb2, 0x3a, 0xea, 0x7f, 0xac, 0x4b, 0x68, 0x08, 0xa4, 0x77, 0x81, 0x2a, 0xad, 0x5d, 0x05, 0xe2, 0x15, 0xe8, 0xf4, 0xcb, 0x06, 0xaf
+        };
+        auto mac = hmac.process("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        if (memcmp(result, mac.data, hmac.digest_size()) != 0) {
+            FAIL(Invalid mac);
+            print_buffer(ByteBuffer::wrap(mac.data, hmac.digest_size()), -1);
+        } else
+            PASS;
+    }
+    {
         I_TEST((HMAC - SHA256 | Reuse));
         Crypto::Authentication::HMAC<Crypto::Hash::SHA256> hmac("Well Hello Friends");
 
@@ -972,7 +1024,7 @@ int sha512_tests()
 {
     sha512_test_name();
     sha512_test_hash();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void sha512_test_name()
@@ -1060,7 +1112,7 @@ int rsa_tests()
     bigint_test_number_theory();
     rsa_test_encrypt_decrypt();
     rsa_emsa_pss_test_create();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void rsa_test_encrypt()
@@ -1193,7 +1245,7 @@ void rsa_test_encrypt_decrypt()
 int tls_tests()
 {
     tls_test_client_hello();
-    return 0;
+    return g_some_test_failed ? 1 : 0;
 }
 
 void tls_test_client_hello()
@@ -1254,7 +1306,18 @@ int bigint_tests()
     bigint_division();
     bigint_base10();
     bigint_import_export();
-    return 0;
+    bigint_bitwise();
+
+    bigint_test_signed_fibo500();
+    bigint_signed_addition_edgecases();
+    bigint_signed_subtraction();
+    bigint_signed_multiplication();
+    bigint_signed_division();
+    bigint_signed_base10();
+    bigint_signed_import_export();
+    bigint_signed_bitwise();
+
+    return g_some_test_failed ? 1 : 0;
 }
 
 Crypto::UnsignedBigInteger bigint_fibonacci(size_t n)
@@ -1263,6 +1326,18 @@ Crypto::UnsignedBigInteger bigint_fibonacci(size_t n)
     Crypto::UnsignedBigInteger num2(1);
     for (size_t i = 0; i < n; ++i) {
         Crypto::UnsignedBigInteger t = num1.plus(num2);
+        num2 = num1;
+        num1 = t;
+    }
+    return num1;
+}
+
+Crypto::SignedBigInteger bigint_signed_fibonacci(size_t n)
+{
+    Crypto::SignedBigInteger num1(0);
+    Crypto::SignedBigInteger num2(1);
+    for (size_t i = 0; i < n; ++i) {
+        Crypto::SignedBigInteger t = num1.plus(num2);
         num2 = num1;
         num1 = t;
     }
@@ -1483,7 +1558,7 @@ void bigint_import_export()
         I_TEST((BigInteger | BigEndian Decode / Encode roundtrip));
         u8 random_bytes[128];
         u8 target_buffer[128];
-        arc4random_buf(random_bytes, 128);
+        AK::fill_with_random(random_bytes, 128);
         auto encoded = Crypto::UnsignedBigInteger::import_data(random_bytes, 128);
         encoded.export_data(target_buffer, 128);
         if (memcmp(target_buffer, random_bytes, 128) != 0)
@@ -1521,6 +1596,316 @@ void bigint_import_export()
         } else {
             FAIL(Invalid value);
             print_buffer(ByteBuffer::wrap(exported - exported_length + 8, exported_length), -1);
+        }
+    }
+}
+
+void bigint_bitwise()
+{
+    {
+        I_TEST((BigInteger | Basic bitwise or));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "1234567"_bigint;
+        if (num1.bitwise_or(num2) == num1) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+    {
+        I_TEST((BigInteger | Bitwise or handles different lengths));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "123456789012345678901234567890"_bigint;
+        auto expected = "123456789012345678901234622167"_bigint;
+        auto result = num1.bitwise_or(num2);
+        if (result == expected) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+    {
+        I_TEST((BigInteger | Basic bitwise and));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "1234561"_bigint;
+        if (num1.bitwise_and(num2) == "1234561"_bigint) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+    {
+        I_TEST((BigInteger | Bitwise and handles different lengths));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "123456789012345678901234567890"_bigint;
+        if (num1.bitwise_and(num2) == "1180290"_bigint) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+    {
+        I_TEST((BigInteger | Basic bitwise xor));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "1234561"_bigint;
+        if (num1.bitwise_xor(num2) == 6) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+    {
+        I_TEST((BigInteger | Bitwise xor handles different lengths));
+        auto num1 = "1234567"_bigint;
+        auto num2 = "123456789012345678901234567890"_bigint;
+        if (num1.bitwise_xor(num2) == "123456789012345678901233441877"_bigint) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
+        }
+    }
+}
+
+void bigint_test_signed_fibo500()
+{
+    {
+        I_TEST((Signed BigInteger | Fibonacci500));
+        bool pass = (bigint_signed_fibonacci(500).unsigned_value().words() == AK::Vector<u32> { 315178285, 505575602, 1883328078, 125027121, 3649625763, 347570207, 74535262, 3832543808, 2472133297, 1600064941, 65273441 });
+
+        if (pass) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+}
+
+void bigint_signed_addition_edgecases()
+{
+    {
+        I_TEST((Signed BigInteger | Borrow with zero));
+        Crypto::SignedBigInteger num1 { Crypto::UnsignedBigInteger { { UINT32_MAX - 3, UINT32_MAX } }, false };
+        Crypto::SignedBigInteger num2 { Crypto::UnsignedBigInteger { UINT32_MAX - 2 }, false };
+        if (num1.plus(num2).unsigned_value().words() == Vector<u32> { 4294967289, 0, 1 }) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Addition to other sign));
+        Crypto::SignedBigInteger num1 = INT32_MAX;
+        Crypto::SignedBigInteger num2 = num1;
+        num2.negate();
+        if (num1.plus(num2) == Crypto::SignedBigInteger { 0 }) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+}
+
+void bigint_signed_subtraction()
+{
+    {
+        I_TEST((Signed BigInteger | Simple Subtraction 1));
+        Crypto::SignedBigInteger num1(80);
+        Crypto::SignedBigInteger num2(70);
+
+        if (num1.minus(num2) == Crypto::SignedBigInteger(10)) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Simple Subtraction 2));
+        Crypto::SignedBigInteger num1(50);
+        Crypto::SignedBigInteger num2(70);
+
+        if (num1.minus(num2) == Crypto::SignedBigInteger { -20 }) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Subtraction with borrow));
+        Crypto::SignedBigInteger num1(Crypto::UnsignedBigInteger { UINT32_MAX });
+        Crypto::SignedBigInteger num2(1);
+        Crypto::SignedBigInteger num3 = num1.plus(num2);
+        Crypto::SignedBigInteger result = num2.minus(num3);
+        num1.negate();
+        if (result == num1) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Subtraction with large numbers));
+        Crypto::SignedBigInteger num1 = bigint_signed_fibonacci(343);
+        Crypto::SignedBigInteger num2 = bigint_signed_fibonacci(218);
+        Crypto::SignedBigInteger result = num2.minus(num1);
+        auto expected = Crypto::UnsignedBigInteger { Vector<u32> { 811430588, 2958904896, 1130908877, 2830569969, 3243275482, 3047460725, 774025231, 7990 } };
+        if ((result.plus(num1) == num2)
+            && (result.unsigned_value() == expected)) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Subtraction with large numbers 2));
+        Crypto::SignedBigInteger num1(Crypto::UnsignedBigInteger { Vector<u32> { 1483061863, 446680044, 1123294122, 191895498, 3347106536, 16, 0, 0, 0 } });
+        Crypto::SignedBigInteger num2(Crypto::UnsignedBigInteger { Vector<u32> { 4196414175, 1117247942, 1123294122, 191895498, 3347106536, 16 } });
+        Crypto::SignedBigInteger result = num1.minus(num2);
+        // this test only verifies that we don't crash on an assertion
+        PASS;
+    }
+}
+
+void bigint_signed_multiplication()
+{
+    {
+        I_TEST((Signed BigInteger | Simple Multiplication));
+        Crypto::SignedBigInteger num1(8);
+        Crypto::SignedBigInteger num2(-251);
+        Crypto::SignedBigInteger result = num1.multiplied_by(num2);
+        if (result == Crypto::SignedBigInteger { -2008 }) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Multiplications with big numbers 1));
+        Crypto::SignedBigInteger num1 = bigint_signed_fibonacci(200);
+        Crypto::SignedBigInteger num2(-12345678);
+        Crypto::SignedBigInteger result = num1.multiplied_by(num2);
+        if (result.unsigned_value().words() == Vector<u32> { 669961318, 143970113, 4028714974, 3164551305, 1589380278, 2 } && result.is_negative()) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Multiplications with big numbers 2));
+        Crypto::SignedBigInteger num1 = bigint_signed_fibonacci(200);
+        Crypto::SignedBigInteger num2 = bigint_signed_fibonacci(341);
+        num1.negate();
+        Crypto::SignedBigInteger result = num1.multiplied_by(num2);
+        if (result.unsigned_value().words() == Vector<u32> { 3017415433, 2741793511, 1957755698, 3731653885, 3154681877, 785762127, 3200178098, 4260616581, 529754471, 3632684436, 1073347813, 2516430 } && result.is_negative()) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+}
+void bigint_signed_division()
+{
+    {
+        I_TEST((Signed BigInteger | Simple Division));
+        Crypto::SignedBigInteger num1(27194);
+        Crypto::SignedBigInteger num2(-251);
+        auto result = num1.divided_by(num2);
+        Crypto::SignedDivisionResult expected = { Crypto::SignedBigInteger(-108), Crypto::SignedBigInteger(86) };
+        if (result.quotient == expected.quotient && result.remainder == expected.remainder) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Division with big numbers));
+        Crypto::SignedBigInteger num1 = bigint_signed_fibonacci(386);
+        Crypto::SignedBigInteger num2 = bigint_signed_fibonacci(238);
+        num1.negate();
+        auto result = num1.divided_by(num2);
+        Crypto::SignedDivisionResult expected = {
+            Crypto::SignedBigInteger(Crypto::UnsignedBigInteger { Vector<u32> { 2300984486, 2637503534, 2022805584, 107 } }, true),
+            Crypto::SignedBigInteger(Crypto::UnsignedBigInteger { Vector<u32> { 1483061863, 446680044, 1123294122, 191895498, 3347106536, 16, 0, 0, 0 } }, true)
+        };
+        if (result.quotient == expected.quotient && result.remainder == expected.remainder) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | Combined test));
+        auto num1 = bigint_signed_fibonacci(497);
+        auto num2 = bigint_signed_fibonacci(238);
+        num1.negate();
+        auto div_result = num1.divided_by(num2);
+        if (div_result.quotient.multiplied_by(num2).plus(div_result.remainder) == num1) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+}
+
+void bigint_signed_base10()
+{
+    {
+        I_TEST((Signed BigInteger | From String));
+        auto result = Crypto::SignedBigInteger::from_base10("-57195071295721390579057195715793");
+        if (result.unsigned_value().words() == Vector<u32> { 3806301393, 954919431, 3879607298, 721 } && result.is_negative()) {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+    {
+        I_TEST((Signed BigInteger | To String));
+        auto result = Crypto::SignedBigInteger { Crypto::UnsignedBigInteger { Vector<u32> { 3806301393, 954919431, 3879607298, 721 } }, true }.to_base10();
+        if (result == "-57195071295721390579057195715793") {
+            PASS;
+        } else {
+            FAIL(Incorrect Result);
+        }
+    }
+}
+
+void bigint_signed_import_export()
+{
+    {
+        I_TEST((Signed BigInteger | BigEndian Decode / Encode roundtrip));
+        u8 random_bytes[129];
+        u8 target_buffer[129];
+        random_bytes[0] = 1;
+        AK::fill_with_random(random_bytes + 1, 128);
+        auto encoded = Crypto::SignedBigInteger::import_data(random_bytes, 129);
+        encoded.export_data(target_buffer, 129);
+        if (memcmp(target_buffer, random_bytes, 129) != 0)
+            FAIL(Could not roundtrip);
+        else
+            PASS;
+    }
+    {
+        I_TEST((Signed BigInteger | BigEndian Encode / Decode roundtrip));
+        u8 target_buffer[128];
+        auto encoded = "-12345678901234567890"_sbigint;
+        auto size = encoded.export_data(target_buffer, 128);
+        auto decoded = Crypto::SignedBigInteger::import_data(target_buffer, size);
+        if (encoded != decoded)
+            FAIL(Could not roundtrip);
+        else
+            PASS;
+    }
+}
+
+void bigint_signed_bitwise()
+{
+    {
+        I_TEST((Signed BigInteger | Bitwise or handles sign));
+        auto num1 = "-1234567"_sbigint;
+        auto num2 = "1234567"_sbigint;
+        if (num1.bitwise_or(num2) == num1) {
+            PASS;
+        } else {
+            FAIL(Invalid value);
         }
     }
 }

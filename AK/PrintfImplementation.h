@@ -251,9 +251,8 @@ ALWAYS_INLINE int print_octal_number(PutChFunc putch, char*& bufptr, u32 number,
 }
 
 template<typename PutChFunc>
-ALWAYS_INLINE int print_string(PutChFunc putch, char*& bufptr, const char* str, bool left_pad, size_t field_width, bool dot)
+ALWAYS_INLINE int print_string(PutChFunc putch, char*& bufptr, const char* str, size_t len, bool left_pad, size_t field_width, bool dot)
 {
-    size_t len = strlen(str);
     if (!dot && (!field_width || field_width < len))
         field_width = len;
     size_t pad_amount = field_width > len ? field_width - len : 0;
@@ -362,7 +361,9 @@ ALWAYS_INLINE int printf_internal(PutChFunc putch, char* buffer, const char*& fm
             switch (*p) {
             case 's': {
                 const char* sp = va_arg(ap, const char*);
-                ret += print_string(putch, bufptr, sp ? sp : "(null)", left_pad, field_width, dot);
+                if (!sp)
+                    sp = "(null)";
+                ret += print_string(putch, bufptr, sp, strlen(sp), left_pad, field_width, dot);
             } break;
 
             case 'd':
@@ -388,7 +389,7 @@ ALWAYS_INLINE int printf_internal(PutChFunc putch, char* buffer, const char*& fm
                 ret += print_hex(putch, bufptr, va_arg(ap, u64), false, false, left_pad, zero_pad, 16);
                 break;
 
-#if !defined(BOOTSTRAPPER) && !defined(KERNEL)
+#if !defined(KERNEL)
             case 'g':
             case 'f':
                 ret += print_double(putch, bufptr, va_arg(ap, double), left_pad, zero_pad, field_width, fraction_length);
@@ -417,8 +418,8 @@ ALWAYS_INLINE int printf_internal(PutChFunc putch, char* buffer, const char*& fm
                 break;
 
             case 'c': {
-                char s[2] { (char)va_arg(ap, int), 0 };
-                ret += print_string(putch, bufptr, s, left_pad, field_width, dot);
+                char c = va_arg(ap, int);
+                ret += print_string(putch, bufptr, &c, 1, left_pad, field_width, dot);
             } break;
 
             case '%':

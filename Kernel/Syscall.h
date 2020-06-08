@@ -80,7 +80,6 @@ namespace Kernel {
     __ENUMERATE_SYSCALL(execve)               \
     __ENUMERATE_SYSCALL(geteuid)              \
     __ENUMERATE_SYSCALL(getegid)              \
-    __ENUMERATE_SYSCALL(getdtablesize)        \
     __ENUMERATE_SYSCALL(dup)                  \
     __ENUMERATE_SYSCALL(dup2)                 \
     __ENUMERATE_SYSCALL(sigaction)            \
@@ -173,7 +172,6 @@ namespace Kernel {
     __ENUMERATE_SYSCALL(shbuf_set_volatile)   \
     __ENUMERATE_SYSCALL(profiling_enable)     \
     __ENUMERATE_SYSCALL(profiling_disable)    \
-    __ENUMERATE_SYSCALL(get_kernel_info_page) \
     __ENUMERATE_SYSCALL(futex)                \
     __ENUMERATE_SYSCALL(set_thread_boost)     \
     __ENUMERATE_SYSCALL(set_process_boost)    \

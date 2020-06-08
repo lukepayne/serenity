@@ -34,6 +34,23 @@ namespace TLS {
 void TLSv12::write_packet(ByteBuffer& packet)
 {
     m_context.tls_buffer.append(packet.data(), packet.size());
+    if (m_context.connection_status > ConnectionStatus::Disconnected) {
+        if (!m_has_scheduled_write_flush) {
+#ifdef TLS_DEBUG
+            dbg() << "Scheduling write of " << m_context.tls_buffer.size();
+#endif
+            deferred_invoke([this](auto&) { write_into_socket(); });
+            m_has_scheduled_write_flush = true;
+        } else {
+            // multiple packet are available, let's flush some out
+#ifdef TLS_DEBUG
+            dbg() << "Flushing scheduled write of " << m_context.tls_buffer.size();
+#endif
+            write_into_socket();
+            // the deferred invoke is still in place
+            m_has_scheduled_write_flush = true;
+        }
+    }
 }
 
 void TLSv12::update_packet(ByteBuffer& packet)
@@ -51,24 +68,21 @@ void TLSv12::update_packet(ByteBuffer& packet)
         if (m_context.cipher_spec_set && m_context.crypto.created) {
             size_t length = packet.size() - header_size + mac_length();
             auto block_size = m_aes_local->cipher().block_size();
-            // if length is a multiple of block size, pad it up again
-            // since it seems no one handles aligned unpadded blocks
-            size_t padding = 0;
-            if (length % block_size == 0) {
-                padding = block_size;
-                length += padding;
-            }
+            // If the length is already a multiple a block_size,
+            // an entire block of padding is added.
+            // In short, we _never_ have no padding.
+            size_t padding = block_size - length % block_size;
+            length += padding;
             size_t mac_size = mac_length();
 
             if (m_context.crypto.created == 1) {
                 // `buffer' will continue to be encrypted
                 auto buffer = ByteBuffer::create_zeroed(length);
                 size_t buffer_position = 0;
-                u16 aligned_length = length + block_size - length % block_size;
                 auto iv_size = iv_length();
 
-                // we need enough space for a header, iv_length bytes of IV and whatever the packet contains
-                auto ct = ByteBuffer::create_zeroed(aligned_length + header_size + iv_size);
+                // We need enough space for a header, iv_length bytes of IV and whatever the packet contains
+                auto ct = ByteBuffer::create_zeroed(length + header_size + iv_size);
 
                 // copy the header over
                 ct.overwrite(0, packet.data(), header_size - 2);
@@ -84,32 +98,30 @@ void TLSv12::update_packet(ByteBuffer& packet)
                 buffer.overwrite(buffer_position, mac.data(), mac.size());
                 buffer_position += mac.size();
 
-                // if there's some padding to be done (since a packet MUST always be padded)
-                // apply it manually
-                if (padding) {
-                    memset(buffer.offset_pointer(buffer_position), padding - 1, padding);
-                    buffer_position += padding;
-                }
+                // Apply the padding (a packet MUST always be padded)
+                memset(buffer.offset_pointer(buffer_position), padding - 1, padding);
+                buffer_position += padding;
 
-                // should be the same value, but the manual padding
-                // throws a wrench into our plans
-                buffer.trim(buffer_position);
+                ASSERT(buffer_position == buffer.size());
 
-                // FIXME: REALLY Should be filled with random bytes
-                auto iv = ByteBuffer::create_zeroed(iv_size);
+                auto iv = ByteBuffer::create_uninitialized(iv_size);
+                AK::fill_with_random(iv.data(), iv.size());
 
                 // write it into the ciphertext portion of the message
                 ct.overwrite(header_size, iv.data(), iv.size());
-                ct.trim(length + block_size - length % block_size + header_size + block_size - padding);
+
+                ASSERT(header_size + iv_size + length == ct.size());
+                ASSERT(length % block_size == 0);
 
                 // get a block to encrypt into
-                auto view = ct.slice_view(header_size + iv_size, length + block_size - length % block_size + block_size - padding - iv_size);
+                auto view = ct.slice_view(header_size + iv_size, length);
 
                 // encrypt the message
                 m_aes_local->encrypt(buffer, view, iv);
 
                 // store the correct ciphertext length into the packet
                 u16 ct_length = (u16)ct.size() - header_size;
+
                 *(u16*)ct.offset_pointer(header_size - 2) = convert_between_host_and_network(ct_length);
 
                 // replace the packet with the ciphertext
@@ -182,7 +194,9 @@ ssize_t TLSv12::handle_message(const ByteBuffer& buffer)
     buffer_position += 2;
 
     if (buffer_position + length > buffer.size()) {
+#ifdef TLS_DEBUG
         dbg() << "record length more than what we have: " << buffer.size();
+#endif
         return (i8)Error::NeedMoreData;
     }
 
@@ -276,9 +290,13 @@ ssize_t TLSv12::handle_message(const ByteBuffer& buffer)
         }
         break;
     case MessageType::Alert:
+#ifdef TLS_DEBUG
         dbg() << "alert message of length " << length;
+#endif
         if (length >= 2) {
+#ifdef TLS_DEBUG
             print_buffer(plain);
+#endif
             auto level = plain[0];
             auto code = plain[1];
             if (level == (u8)AlertLevel::Critical) {
@@ -292,9 +310,7 @@ ssize_t TLSv12::handle_message(const ByteBuffer& buffer)
             if (code == 0) {
                 // close notify
                 res += 2;
-                auto closure_alert = build_alert(true, (u8)AlertDescription::CloseNotify);
-                write_packet(closure_alert);
-                flush();
+                alert(AlertLevel::Critical, AlertDescription::CloseNotify);
                 m_context.connection_finished = true;
             }
             m_context.error_code = (Error)code;

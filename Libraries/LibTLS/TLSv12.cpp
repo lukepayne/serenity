@@ -30,6 +30,10 @@
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibTLS/TLSv12.h>
 
+#ifndef SOCK_NONBLOCK
+#    include <sys/ioctl.h>
+#endif
+
 //#define TLS_DEBUG
 
 namespace {
@@ -183,13 +187,17 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
         size_t length = _get_asn1_length((const u8*)&buffer[position], size - position, octets);
 
         if (octets > 4 || octets > size - position) {
+#ifdef TLS_DEBUG
             dbg() << "could not read the certificate";
+#endif
             return position;
         }
 
         position += octets;
         if (size - position < length) {
+#ifdef TLS_DEBUG
             dbg() << "not enough data for sequence";
+#endif
             return (i8)Error::NeedMoreData;
         }
 
@@ -368,7 +376,9 @@ static ssize_t _parse_asn1(const Context& context, Certificate& cert, const u8* 
             hash.initialize(Crypto::Hash::HashKind::SHA512);
             break;
         default:
+#ifdef TLS_DEBUG
             dbg() << "Unsupported hash mode " << (u32)cert.key_algorithm;
+#endif
             // fallback to md5, it will fail later
             hash.initialize(Crypto::Hash::HashKind::MD5);
             break;
@@ -410,13 +420,17 @@ ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
     ssize_t res = 0;
 
     if (buffer.size() < 3) {
+#ifdef TLS_DEBUG
         dbg() << "not enough certificate header data";
+#endif
         return (i8)Error::NeedMoreData;
     }
 
     u32 certificate_total_length = buffer[0] * 0x10000 + buffer[1] * 0x100 + buffer[2];
 
+#ifdef TLS_DEBUG
     dbg() << "total length: " << certificate_total_length;
+#endif
 
     if (certificate_total_length <= 4)
         return 3 * certificate_total_length;
@@ -424,7 +438,9 @@ ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
     res += 3;
 
     if (certificate_total_length > buffer.size() - res) {
+#ifdef TLS_DEBUG
         dbg() << "not enough data for claimed total cert length";
+#endif
         return (i8)Error::NeedMoreData;
     }
     size_t size = certificate_total_length;
@@ -435,14 +451,18 @@ ssize_t TLSv12::handle_certificate(const ByteBuffer& buffer)
     while (size > 0) {
         ++index;
         if (buffer.size() - res < 3) {
+#ifdef TLS_DEBUG
             dbg() << "not enough data for certificate length";
+#endif
             return (i8)Error::NeedMoreData;
         }
         size_t certificate_size = buffer[res] * 0x10000 + buffer[res + 1] * 0x100 + buffer[res + 2];
         res += 3;
 
         if (buffer.size() - res < certificate_size) {
+#ifdef TLS_DEBUG
             dbg() << "not enough data for certificate body";
+#endif
             return (i8)Error::NeedMoreData;
         }
 
@@ -620,7 +640,7 @@ bool Certificate::is_valid() const
 
 void TLSv12::try_disambiguate_error() const
 {
-    dbg() << "Possible failure cause: ";
+    dbg() << "Possible failure cause(s): ";
     switch ((AlertDescription)m_context.critical_error) {
     case AlertDescription::HandshakeFailure:
         if (!m_context.cipher_spec_set) {
@@ -632,13 +652,73 @@ void TLSv12::try_disambiguate_error() const
     case AlertDescription::InsufficientSecurity:
         dbg() << "- No cipher suite in common with " << m_context.SNI << " (the server is oh so secure)";
         break;
+    case AlertDescription::ProtocolVersion:
+        dbg() << "- The server refused to negotiate with TLS 1.2 :(";
+        break;
+    case AlertDescription::UnexpectedMessage:
+        dbg() << "- We sent an invalid message for the state we're in.";
+        break;
+    case AlertDescription::BadRecordMAC:
+        dbg() << "- Bad MAC record from our side.";
+        dbg() << "- Ciphertext wasn't an even multiple of the block length.";
+        dbg() << "- Bad block cipher padding.";
+        dbg() << "- If both sides are compliant, the only cause is messages being corrupted in the network.";
+        break;
+    case AlertDescription::RecordOverflow:
+        dbg() << "- Sent a ciphertext record which has a length bigger than 18432 bytes.";
+        dbg() << "- Sent record decrypted to a compressed record that has a length bigger than 18432 bytes.";
+        dbg() << "- If both sides are compliant, the only cause is messages being corrupted in the network.";
+        break;
+    case AlertDescription::DecompressionFailure:
+        dbg() << "- We sent invalid input for decompression (e.g. data that would expand to excessive length)";
+        break;
+    case AlertDescription::IllegalParameter:
+        dbg() << "- We sent a parameter in the handshake that is out of range or inconsistent with the other parameters.";
+        break;
+    case AlertDescription::DecodeError:
+        dbg() << "- The message we sent cannot be decoded because a field was out of range or the length was incorrect.";
+        dbg() << "- If both sides are compliant, the only cause is messages being corrupted in the network.";
+        break;
+    case AlertDescription::DecryptError:
+        dbg() << "- A handshake crypto operation failed. This includes signature verification and validating Finished.";
+        break;
+    case AlertDescription::AccessDenied:
+        dbg() << "- The certificate is valid, but once access control was applied, the sender decided to stop negotiation.";
+        break;
+    case AlertDescription::InternalError:
+        dbg() << "- No one knows, but it isn't a protocol failure.";
+        break;
     case AlertDescription::DecryptionFailed:
-        dbg() << "- Bad MAC record from our side";
-        dbg() << "- Bad block cipher padding";
+    case AlertDescription::NoCertificate:
+    case AlertDescription::ExportRestriction:
+        dbg() << "- No one knows, the server sent a non-compliant alert.";
         break;
     default:
-        dbg() << "- No one knows";
+        dbg() << "- No one knows.";
         break;
     }
 }
+
+TLSv12::TLSv12(Core::Object* parent, Version version)
+    : Core::Socket(Core::Socket::Type::TCP, parent)
+{
+    m_context.version = version;
+    m_context.is_server = false;
+    m_context.tls_buffer = ByteBuffer::create_uninitialized(0);
+#ifdef SOCK_NONBLOCK
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+#else
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    int option = 1;
+    ioctl(fd, FIONBIO, &option);
+#endif
+    if (fd < 0) {
+        set_error(errno);
+    } else {
+        set_fd(fd);
+        set_mode(IODevice::ReadWrite);
+        set_error(0);
+    }
+}
+
 }

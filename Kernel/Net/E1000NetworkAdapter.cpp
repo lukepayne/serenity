@@ -26,7 +26,7 @@
 
 #include <Kernel/Net/E1000NetworkAdapter.h>
 #include <Kernel/Thread.h>
-#include <LibBareMetal/IO.h>
+#include <Kernel/IO.h>
 
 //#define E1000_DEBUG
 
@@ -223,7 +223,7 @@ void E1000NetworkAdapter::handle_irq(const RegisterState&)
 void E1000NetworkAdapter::detect_eeprom()
 {
     out32(REG_EEPROM, 0x1);
-    for (volatile int i = 0; i < 999; ++i) {
+    for (int i = 0; i < 999; ++i) {
         u32 data = in32(REG_EEPROM);
         if (data & 0x10) {
             m_has_eeprom = true;

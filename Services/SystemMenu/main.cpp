@@ -24,8 +24,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "PowerDialog.h"
-#include <AK/FileSystemPath.h>
+#include "ShutdownDialog.h"
+#include <AK/LexicalPath.h>
 #include <AK/QuickSort.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/DirIterator.h>
@@ -65,6 +65,7 @@ static NonnullRefPtr<GUI::Menu> build_system_menu();
 int main(int argc, char** argv)
 {
     GUI::Application app(argc, argv);
+    app.set_quit_when_last_window_deleted(false);
 
     auto menu = build_system_menu();
     menu->realize_menu_if_needed();
@@ -170,7 +171,7 @@ NonnullRefPtr<GUI::Menu> build_system_menu()
         while (dt.has_next()) {
             auto theme_name = dt.next_path();
             auto theme_path = String::format("/res/themes/%s", theme_name.characters());
-            g_themes.append({ FileSystemPath(theme_name).title(), theme_path });
+            g_themes.append({ LexicalPath(theme_name).title(), theme_path });
         }
         quick_sort(g_themes, [](auto& a, auto& b) { return a.name < b.name; });
     }
@@ -203,7 +204,7 @@ NonnullRefPtr<GUI::Menu> build_system_menu()
     }));
     system_menu->add_separator();
     system_menu->add_action(GUI::Action::create("Exit...", [](auto&) {
-        Vector<char const*> command = PowerDialog::show();
+        auto command = ShutdownDialog::show();
 
         if (command.size() == 0)
             return;

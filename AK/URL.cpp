@@ -24,7 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <AK/FileSystemPath.h>
+#include <AK/LexicalPath.h>
 #include <AK/StringBuilder.h>
 #include <AK/URL.h>
 
@@ -47,6 +47,9 @@ static inline bool is_digit(char ch)
 
 bool URL::parse(const StringView& string)
 {
+    if (string.is_null())
+        return false;
+
     enum class State {
         InProtocol,
         InHostname,
@@ -109,6 +112,8 @@ bool URL::parse(const StringView& string)
                 m_port = 80;
             else if (m_protocol == "https")
                 m_port = 443;
+            else if (m_protocol == "gemini")
+                m_port = 1965;
             state = State::InHostname;
             buffer.clear();
             continue;
@@ -270,7 +275,7 @@ String URL::to_string() const
     builder.append("://");
     builder.append(m_host);
     if (protocol() != "file") {
-        if (!(protocol() == "http" && port() == 80) && !(protocol() == "https" && port() == 443)) {
+        if (!(protocol() == "http" && port() == 80) && !(protocol() == "https" && port() == 443) && !(protocol() == "gemini" && port() == 1965)) {
             builder.append(':');
             builder.append(String::number(m_port));
         }
@@ -289,9 +294,21 @@ String URL::to_string() const
 
 URL URL::complete_url(const String& string) const
 {
+    if (!is_valid())
+        return {};
+
     URL url(string);
     if (url.is_valid())
         return url;
+
+    if (protocol() == "data")
+        return {};
+
+    if (string.starts_with("//")) {
+        URL url(String::format("%s:%s", m_protocol.characters(), string.characters()));
+        if (url.is_valid())
+            return url;
+    }
 
     if (string.starts_with("/")) {
         url = *this;
@@ -299,24 +316,38 @@ URL URL::complete_url(const String& string) const
         return url;
     }
 
+    if (string.starts_with("#")) {
+        url = *this;
+        url.set_fragment(string.substring(1, string.length() - 1));
+        return url;
+    }
+
     StringBuilder builder;
-    FileSystemPath fspath(path());
+    LexicalPath lexical_path(path());
     builder.append('/');
 
     bool document_url_ends_in_slash = path()[path().length() - 1] == '/';
 
-    for (size_t i = 0; i < fspath.parts().size(); ++i) {
-        if (i == fspath.parts().size() - 1 && !document_url_ends_in_slash)
+    for (size_t i = 0; i < lexical_path.parts().size(); ++i) {
+        if (i == lexical_path.parts().size() - 1 && !document_url_ends_in_slash)
             break;
-        builder.append(fspath.parts()[i]);
+        builder.append(lexical_path.parts()[i]);
         builder.append('/');
     }
     builder.append(string);
     auto built = builder.to_string();
-    fspath = FileSystemPath(built);
+    lexical_path = LexicalPath(built);
+
+    built = lexical_path.string();
+    if (string.ends_with('/') && !built.ends_with('/')) {
+        builder.clear();
+        builder.append(built);
+        builder.append('/');
+        built = builder.to_string();
+    }
 
     url = *this;
-    url.set_path(fspath.string());
+    url.set_path(built);
     return url;
 }
 
@@ -377,7 +408,7 @@ URL URL::create_with_url_or_path(const String& url_or_path)
     if (url.is_valid())
         return url;
 
-    String path = canonicalized_path(url_or_path);
+    String path = LexicalPath::canonicalized_path(url_or_path);
     return URL::create_with_file_protocol(path);
 }
 
@@ -385,7 +416,7 @@ String URL::basename() const
 {
     if (!m_valid)
         return {};
-    return FileSystemPath(m_path).basename();
+    return LexicalPath(m_path).basename();
 }
 
 }

@@ -39,18 +39,12 @@
 #include <Kernel/KSyms.h>
 #include <Kernel/Process.h>
 #include <Kernel/VM/MemoryManager.h>
-#include <LibBareMetal/IO.h>
+#include <Kernel/IO.h>
 #include <LibC/mallocdefs.h>
 
 //#define PAGE_FAULT_DEBUG
 
 namespace Kernel {
-
-struct [[gnu::packed]] DescriptorTablePointer
-{
-    u16 limit;
-    void* address;
-};
 
 static DescriptorTablePointer s_idtr;
 static DescriptorTablePointer s_gdtr;
@@ -389,6 +383,16 @@ void flush_gdt()
     s_gdtr.limit = (s_gdt_length * 8) - 1;
     asm("lgdt %0" ::"m"(s_gdtr)
         : "memory");
+}
+
+const DescriptorTablePointer& get_gdtr()
+{
+    return s_gdtr;
+}
+
+const DescriptorTablePointer& get_idtr()
+{
+    return s_idtr;
 }
 
 void gdt_init()
@@ -734,22 +738,6 @@ void cpu_detect()
     g_cpu_supports_umip = (extended_features.ecx() & (1 << 2));
 }
 
-void stac()
-{
-    if (!g_cpu_supports_smap)
-        return;
-    asm volatile("stac" ::
-                     : "cc");
-}
-
-void clac()
-{
-    if (!g_cpu_supports_smap)
-        return;
-    asm volatile("clac" ::
-                     : "cc");
-}
-
 void cpu_setup()
 {
     cpu_detect();
@@ -835,6 +823,14 @@ void cpu_setup()
     }
 }
 
+u32 read_cr0()
+{
+    u32 cr0;
+    asm("movl %%cr0, %%eax"
+        : "=a"(cr0));
+    return cr0;
+}
+
 u32 read_cr3()
 {
     u32 cr3;
@@ -847,6 +843,14 @@ void write_cr3(u32 cr3)
 {
     asm volatile("movl %%eax, %%cr3" ::"a"(cr3)
                  : "memory");
+}
+
+u32 read_cr4()
+{
+    u32 cr4;
+    asm("movl %%cr4, %%eax"
+        : "=a"(cr4));
+    return cr4;
 }
 
 u32 read_dr6()

@@ -31,15 +31,15 @@
 #include <AK/StringBuilder.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/BoxLayout.h>
-#include <LibGUI/Menu.h>
 #include <LibGUI/InputBox.h>
+#include <LibGUI/Menu.h>
 #include <LibGUI/Notification.h>
 #include <LibGUI/Splitter.h>
 #include <LibGUI/TableView.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/TextEditor.h>
 #include <LibGUI/Window.h>
-#include <LibWeb/HtmlView.h>
+#include <LibWeb/PageView.h>
 
 IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& name)
     : m_client(client)
@@ -52,7 +52,7 @@ IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& na
     // Make a container for the log buffer view + (optional) member list.
     auto& container = add<GUI::HorizontalSplitter>();
 
-    m_html_view = container.add<Web::HtmlView>();
+    m_page_view = container.add<Web::PageView>();
 
     if (m_type == Channel) {
         auto& member_view = container.add<GUI::TableView>();
@@ -189,18 +189,20 @@ IRCWindow::IRCWindow(IRCClient& client, void* owner, Type type, const String& na
         };
     }
 
-    m_text_editor = add<GUI::TextBox>();
-    m_text_editor->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
-    m_text_editor->set_preferred_size(0, 19);
-    m_text_editor->on_return_pressed = [this] {
+    m_text_box = add<GUI::TextBox>();
+    m_text_box->set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
+    m_text_box->set_preferred_size(0, 19);
+    m_text_box->on_return_pressed = [this] {
         if (m_type == Channel)
-            m_client.handle_user_input_in_channel(m_name, m_text_editor->text());
+            m_client.handle_user_input_in_channel(m_name, m_text_box->text());
         else if (m_type == Query)
-            m_client.handle_user_input_in_query(m_name, m_text_editor->text());
+            m_client.handle_user_input_in_query(m_name, m_text_box->text());
         else if (m_type == Server)
-            m_client.handle_user_input_in_server(m_text_editor->text());
-        m_text_editor->clear();
+            m_client.handle_user_input_in_server(m_text_box->text());
+        m_text_box->add_current_text_to_history();
+        m_text_box->clear();
     };
+    m_text_box->set_history_enabled(true);
 
     m_client.register_subwindow(*this);
 }
@@ -213,7 +215,7 @@ IRCWindow::~IRCWindow()
 void IRCWindow::set_log_buffer(const IRCLogBuffer& log_buffer)
 {
     m_log_buffer = &log_buffer;
-    m_html_view->set_document(const_cast<Web::Document*>(&log_buffer.document()));
+    m_page_view->set_document(const_cast<Web::Document*>(&log_buffer.document()));
 }
 
 bool IRCWindow::is_active() const
@@ -261,7 +263,7 @@ void IRCWindow::did_add_message(const String& name, const String& message)
         m_client.aid_update_window_list();
         return;
     }
-    m_html_view->scroll_to_bottom();
+    m_page_view->scroll_to_bottom();
 }
 
 void IRCWindow::clear_unread_count()

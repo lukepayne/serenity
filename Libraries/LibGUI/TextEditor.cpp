@@ -53,12 +53,13 @@ namespace GUI {
 TextEditor::TextEditor(Type type)
     : m_type(type)
 {
+    set_accepts_emoji_input(true);
     set_background_role(ColorRole::Base);
     set_foreground_role(ColorRole::BaseText);
     set_document(TextDocument::create());
     set_scrollbars_enabled(is_multi_line());
-    set_font(FontDatabase::the().get_by_name("Csilla Thin"));
-    // FIXME: Recompute vertical scrollbar step size on font change.
+    if (is_multi_line())
+        set_font(Gfx::Font::default_fixed_width_font());
     vertical_scrollbar().set_step(line_height());
     m_cursor = { 0, 0 };
     m_automatic_selection_scroll_timer = add<Core::Timer>(100, [this] {
@@ -104,9 +105,6 @@ void TextEditor::create_actions()
 
 void TextEditor::set_text(const StringView& text)
 {
-    if (is_single_line() && text.length() == line(0).length() && !memcmp(text.characters_without_null_termination(), line(0).characters(), text.length()))
-        return;
-
     m_selection.clear();
 
     document().set_text(text);
@@ -162,27 +160,33 @@ TextPosition TextEditor::text_position_at(const Gfx::Point& a_position) const
 
     line_index = max((size_t)0, min(line_index, line_count() - 1));
 
-    size_t column_index;
+    size_t column_index = 0;
     switch (m_text_alignment) {
     case Gfx::TextAlignment::CenterLeft:
-        if (position.x() <= 0)
-            column_index = 0;
-        else
-            column_index = (position.x() + glyph_width() / 2) / glyph_width();
-        if (is_line_wrapping_enabled()) {
-            for_each_visual_line(line_index, [&](const Gfx::Rect& rect, const StringView&, size_t start_of_line) {
-                if (rect.contains_vertically(position.y())) {
-                    column_index += start_of_line;
-                    return IterationDecision::Break;
-                }
+        for_each_visual_line(line_index, [&](const Gfx::Rect& rect, auto& view, size_t start_of_line) {
+            if (is_multi_line() && !rect.contains_vertically(position.y()))
                 return IterationDecision::Continue;
-            });
-        }
+            column_index = start_of_line;
+            if (position.x() <= 0) {
+                // We're outside the text on the left side, put cursor at column 0 on this visual line.
+            } else {
+                int glyph_x = 0;
+                size_t i = 0;
+                for (; i < view.length(); ++i) {
+                    int advance = font().glyph_width(view.codepoints()[i]) + font().glyph_spacing();
+                    if ((glyph_x + (advance / 2)) >= position.x())
+                        break;
+                    glyph_x += advance;
+                }
+                column_index += i;
+            }
+            return IterationDecision::Break;
+        });
         break;
     case Gfx::TextAlignment::CenterRight:
         // FIXME: Support right-aligned line wrapping, I guess.
         ASSERT(!is_line_wrapping_enabled());
-        column_index = (position.x() - content_x_for_position({ line_index, 0 }) + glyph_width() / 2) / glyph_width();
+        column_index = (position.x() - content_x_for_position({ line_index, 0 }) + fixed_glyph_width() / 2) / fixed_glyph_width();
         break;
     default:
         ASSERT_NOT_REACHED();
@@ -205,20 +209,10 @@ void TextEditor::doubleclick_event(MouseEvent& event)
 
     auto start = text_position_at(event.position());
     auto end = start;
-    auto& line = this->line(start.line());
 
     if (!document().has_spans()) {
-        while (start.column() > 0) {
-            if (isspace(line.characters()[start.column() - 1]))
-                break;
-            start.set_column(start.column() - 1);
-        }
-
-        while (end.column() < line.length()) {
-            if (isspace(line.characters()[end.column()]))
-                break;
-            end.set_column(end.column() + 1);
-        }
+        start = document().first_word_break_before(start, false);
+        end = document().first_word_break_after(end);
     } else {
         for (auto& span : document().spans()) {
             if (!span.range.contains(start))
@@ -408,6 +402,9 @@ void TextEditor::paint_event(PaintEvent& event)
         width() - width_occupied_by_vertical_scrollbar() - ruler_width(),
         height() - height_occupied_by_horizontal_scrollbar()
     };
+    if (m_ruler_visible)
+        text_clip_rect.move_by(-ruler_width(), 0);
+    text_clip_rect.move_by(horizontal_scrollbar().value(), vertical_scrollbar().value());
     painter.add_clip_rect(text_clip_rect);
 
     for (size_t line_index = first_visible_line; line_index <= last_visible_line; ++line_index) {
@@ -432,7 +429,7 @@ void TextEditor::paint_event(PaintEvent& event)
         size_t selection_end_column_within_line = selection.end().line() == line_index ? selection.end().column() : line.length();
 
         size_t visual_line_index = 0;
-        for_each_visual_line(line_index, [&](const Gfx::Rect& visual_line_rect, const StringView& visual_line_text, size_t start_of_visual_line) {
+        for_each_visual_line(line_index, [&](const Gfx::Rect& visual_line_rect, auto& visual_line_text, size_t start_of_visual_line) {
             if (is_multi_line() && line_index == m_cursor.line())
                 painter.fill_rect(visual_line_rect, widget_background_color.darkened(0.9f));
 #ifdef DEBUG_TEXTEDITOR
@@ -443,9 +440,9 @@ void TextEditor::paint_event(PaintEvent& event)
                 auto color = palette().color(is_enabled() ? foreground_role() : Gfx::ColorRole::DisabledText);
                 painter.draw_text(visual_line_rect, visual_line_text, m_text_alignment, color);
             } else {
-                int advance = font().glyph_width(' ') + font().glyph_spacing();
-                Gfx::Rect character_rect = { visual_line_rect.location(), { font().glyph_width(' '), line_height() } };
+                Gfx::Rect character_rect = { visual_line_rect.location(), { 0, line_height() } };
                 for (size_t i = 0; i < visual_line_text.length(); ++i) {
+                    u32 codepoint = visual_line_text.substring_view(i, 1).codepoints()[0];
                     const Gfx::Font* font = &this->font();
                     Color color;
                     Optional<Color> background_color;
@@ -462,16 +459,17 @@ void TextEditor::paint_event(PaintEvent& event)
                         underline = span.is_underlined;
                         break;
                     }
+                    character_rect.set_width(font->glyph_width(codepoint) + font->glyph_spacing());
                     if (background_color.has_value())
                         painter.fill_rect(character_rect, background_color.value());
                     painter.draw_text(character_rect, visual_line_text.substring_view(i, 1), *font, m_text_alignment, color);
                     if (underline) {
                         painter.draw_line(character_rect.bottom_left().translated(0, 1), character_rect.bottom_right().translated(0, 1), color);
                     }
-                    character_rect.move_by(advance, 0);
+                    character_rect.move_by(character_rect.width(), 0);
                 }
             }
-            bool physical_line_has_selection = has_selection && line_index >= selection.start().line() && line_index <= selection.end().line();
+
             if (physical_line_has_selection) {
                 size_t start_of_selection_within_visual_line = (size_t)max(0, (int)selection_start_column_within_line - (int)start_of_visual_line);
                 size_t end_of_selection_within_visual_line = selection_end_column_within_line - start_of_visual_line;
@@ -503,12 +501,14 @@ void TextEditor::paint_event(PaintEvent& event)
 
                     painter.fill_rect(selection_rect, background_color);
 
-                    StringView visual_selected_text {
-                        visual_line_text.characters_without_null_termination() + start_of_selection_within_visual_line,
-                        end_of_selection_within_visual_line - start_of_selection_within_visual_line
-                    };
+                    if (visual_line_text.codepoints()) {
+                        Utf32View visual_selected_text {
+                            visual_line_text.codepoints() + start_of_selection_within_visual_line,
+                            end_of_selection_within_visual_line - start_of_selection_within_visual_line
+                        };
 
-                    painter.draw_text(selection_rect, visual_selected_text, Gfx::TextAlignment::CenterLeft, text_color);
+                        painter.draw_text(selection_rect, visual_selected_text, Gfx::TextAlignment::CenterLeft, text_color);
+                    }
                 }
             }
             ++visual_line_index;
@@ -540,9 +540,9 @@ void TextEditor::select_all()
 {
     TextPosition start_of_document { 0, 0 };
     TextPosition end_of_document { line_count() - 1, line(line_count() - 1).length() };
-    m_selection.set(start_of_document, end_of_document);
+    m_selection.set(end_of_document, start_of_document);
     did_update_selection();
-    set_cursor(end_of_document);
+    set_cursor(start_of_document);
     update();
 }
 
@@ -605,6 +605,15 @@ void TextEditor::move_selected_lines_down()
     update();
 }
 
+int strcmp_utf32(const u32* s1, const u32* s2, size_t n)
+{
+    while (n-- > 0) {
+        if (*s1++ != *s2++)
+            return s1[-1] < s2[-1] ? -1 : 1;
+    }
+    return 0;
+}
+
 void TextEditor::sort_selected_lines()
 {
     if (is_readonly())
@@ -623,7 +632,7 @@ void TextEditor::sort_selected_lines()
     auto end = lines.begin() + (int)last_line + 1;
 
     quick_sort(start, end, [](auto& a, auto& b) {
-        return strcmp(a.characters(), b.characters()) < 0;
+        return strcmp_utf32(a.codepoints(), b.codepoints(), min(a.length(), b.length())) < 0;
     });
 
     did_change();
@@ -708,12 +717,19 @@ void TextEditor::keydown_event(KeyEvent& event)
         return;
     }
     if (event.key() == KeyCode::Key_Left) {
-        if (event.ctrl() && document().has_spans()) {
-            // FIXME: Do something nice when the document has no spans.
-            auto span = document().first_non_skippable_span_before(m_cursor);
-            TextPosition new_cursor = !span.has_value()
-                ? TextPosition(0, 0)
-                : span.value().range.start();
+        if (event.ctrl()) {
+            TextPosition new_cursor;
+            if (document().has_spans()) {
+                auto span = document().first_non_skippable_span_before(m_cursor);
+                if (span.has_value()) {
+                    new_cursor = span.value().range.start();
+                } else {
+                    // No remaining spans, just use word break calculation
+                    new_cursor = document().first_word_break_before(m_cursor, true);
+                }
+            } else {
+                new_cursor = document().first_word_break_before(m_cursor, true);
+            }
             toggle_selection_if_needed_for_event(event);
             set_cursor(new_cursor);
             if (event.shift() && m_selection.start().is_valid()) {
@@ -743,12 +759,19 @@ void TextEditor::keydown_event(KeyEvent& event)
         return;
     }
     if (event.key() == KeyCode::Key_Right) {
-        if (event.ctrl() && document().has_spans()) {
-            // FIXME: Do something nice when the document has no spans.
-            auto span = document().first_non_skippable_span_after(m_cursor);
-            TextPosition new_cursor = !span.has_value()
-                ? document().spans().last().range.end()
-                : span.value().range.start();
+        if (event.ctrl()) {
+            TextPosition new_cursor;
+            if (document().has_spans()) {
+                auto span = document().first_non_skippable_span_after(m_cursor);
+                if (span.has_value()) {
+                    new_cursor = span.value().range.start();
+                } else {
+                    // No remaining spans, just use word break calculation
+                    new_cursor = document().first_word_break_after(m_cursor);
+                }
+            } else {
+                new_cursor = document().first_word_break_after(m_cursor);
+            }
             toggle_selection_if_needed_for_event(event);
             set_cursor(new_cursor);
             if (event.shift() && m_selection.start().is_valid()) {
@@ -922,12 +945,18 @@ void TextEditor::do_delete()
 int TextEditor::content_x_for_position(const TextPosition& position) const
 {
     auto& line = this->line(position.line());
-    int x_offset = -1;
+    int x_offset = 0;
     switch (m_text_alignment) {
     case Gfx::TextAlignment::CenterLeft:
-        for_each_visual_line(position.line(), [&](const Gfx::Rect&, const StringView& view, size_t start_of_visual_line) {
-            if (position.column() >= start_of_visual_line && ((position.column() - start_of_visual_line) <= view.length())) {
-                x_offset = (position.column() - start_of_visual_line) * glyph_width();
+        for_each_visual_line(position.line(), [&](const Gfx::Rect&, auto& visual_line_view, size_t start_of_visual_line) {
+            size_t offset_in_visual_line = position.column() - start_of_visual_line;
+            if (position.column() >= start_of_visual_line && (offset_in_visual_line <= visual_line_view.length())) {
+                if (offset_in_visual_line == 0) {
+                    x_offset = 0;
+                } else {
+                    x_offset = font().width(visual_line_view.substring_view(0, offset_in_visual_line));
+                    x_offset += font().glyph_spacing();
+                }
                 return IterationDecision::Break;
             }
             return IterationDecision::Continue;
@@ -936,7 +965,7 @@ int TextEditor::content_x_for_position(const TextPosition& position) const
     case Gfx::TextAlignment::CenterRight:
         // FIXME
         ASSERT(!is_line_wrapping_enabled());
-        return content_width() - m_horizontal_content_padding - (line.length() * glyph_width()) + (position.column() * glyph_width());
+        return content_width() - m_horizontal_content_padding - (line.length() * fixed_glyph_width()) + (position.column() * fixed_glyph_width());
     default:
         ASSERT_NOT_REACHED();
     }
@@ -958,7 +987,7 @@ Gfx::Rect TextEditor::content_rect_for_position(const TextPosition& position) co
     }
 
     Gfx::Rect rect;
-    for_each_visual_line(position.line(), [&](const Gfx::Rect& visual_line_rect, const StringView& view, size_t start_of_visual_line) {
+    for_each_visual_line(position.line(), [&](const Gfx::Rect& visual_line_rect, auto& view, size_t start_of_visual_line) {
         if (position.column() >= start_of_visual_line && ((position.column() - start_of_visual_line) <= view.length())) {
             // NOTE: We have to subtract the horizontal padding here since it's part of the visual line rect
             //       *and* included in what we get from content_x_for_position().
@@ -1003,14 +1032,15 @@ void TextEditor::scroll_position_into_view(const TextPosition& position)
 
 void TextEditor::scroll_cursor_into_view()
 {
-    scroll_position_into_view(m_cursor);
+    if (!m_reflow_deferred)
+        scroll_position_into_view(m_cursor);
 }
 
 Gfx::Rect TextEditor::line_content_rect(size_t line_index) const
 {
     auto& line = this->line(line_index);
     if (is_single_line()) {
-        Gfx::Rect line_rect = { content_x_for_position({ line_index, 0 }), 0, (int)line.length() * glyph_width(), font().glyph_height() + 2 };
+        Gfx::Rect line_rect = { content_x_for_position({ line_index, 0 }), 0, font().width(line.view()), font().glyph_height() + 4 };
         line_rect.center_vertically_within({ {}, frame_inner_rect().size() });
         return line_rect;
     }
@@ -1019,7 +1049,7 @@ Gfx::Rect TextEditor::line_content_rect(size_t line_index) const
     return {
         content_x_for_position({ line_index, 0 }),
         (int)line_index * line_height(),
-        (int)line.length() * glyph_width(),
+        font().width(line.view()),
         line_height()
     };
 }
@@ -1066,6 +1096,7 @@ void TextEditor::set_cursor(const TextPosition& a_position)
 
 void TextEditor::focusin_event(Core::Event&)
 {
+    m_cursor_state = true;
     update_cursor();
     start_timer(500);
 }
@@ -1106,7 +1137,8 @@ bool TextEditor::write_to_file(const StringView& path)
     for (size_t i = 0; i < line_count(); ++i) {
         auto& line = this->line(i);
         if (line.length()) {
-            ssize_t nwritten = write(fd, line.characters(), line.length());
+            auto line_as_utf8 = line.to_utf8();
+            ssize_t nwritten = write(fd, line_as_utf8.characters(), line_as_utf8.length());
             if (nwritten < 0) {
                 perror("write");
                 close(fd);
@@ -1133,7 +1165,7 @@ String TextEditor::text() const
     StringBuilder builder;
     for (size_t i = 0; i < line_count(); ++i) {
         auto& line = this->line(i);
-        builder.append(line.characters(), line.length());
+        builder.append(line.view());
         if (i != line_count() - 1)
             builder.append('\n');
     }
@@ -1171,6 +1203,7 @@ void TextEditor::delete_selection()
 
 void TextEditor::insert_at_cursor_or_replace_selection(const StringView& text)
 {
+    ReflowDeferrer defer(*this);
     ASSERT(!is_readonly());
     if (has_selection())
         delete_selection();
@@ -1198,11 +1231,28 @@ void TextEditor::paste()
 {
     if (is_readonly())
         return;
+
     auto paste_text = Clipboard::the().data();
     printf("Paste: \"%s\"\n", paste_text.characters());
 
     TemporaryChange change(m_automatic_indentation_enabled, false);
     insert_at_cursor_or_replace_selection(paste_text);
+}
+
+void TextEditor::defer_reflow()
+{
+    ++m_reflow_deferred;
+}
+
+void TextEditor::undefer_reflow()
+{
+    ASSERT(m_reflow_deferred);
+    if (!--m_reflow_deferred) {
+        if (m_reflow_requested) {
+            recompute_all_visual_lines();
+            scroll_cursor_into_view();
+        }
+    }
 }
 
 void TextEditor::enter_event(Core::Event&)
@@ -1333,6 +1383,11 @@ void TextEditor::clear_selection()
 
 void TextEditor::recompute_all_visual_lines()
 {
+    if (m_reflow_deferred) {
+        m_reflow_requested = true;
+        return;
+    }
+
     int y_offset = 0;
     for (size_t line_index = 0; line_index < line_count(); ++line_index) {
         recompute_visual_lines(line_index);
@@ -1357,7 +1412,7 @@ void TextEditor::ensure_cursor_is_valid()
 size_t TextEditor::visual_line_containing(size_t line_index, size_t column) const
 {
     size_t visual_line_index = 0;
-    for_each_visual_line(line_index, [&](const Gfx::Rect&, const StringView& view, size_t start_of_visual_line) {
+    for_each_visual_line(line_index, [&](const Gfx::Rect&, auto& view, size_t start_of_visual_line) {
         if (column >= start_of_visual_line && ((column - start_of_visual_line) < view.length()))
             return IterationDecision::Break;
         ++visual_line_index;
@@ -1378,15 +1433,16 @@ void TextEditor::recompute_visual_lines(size_t line_index)
     if (is_line_wrapping_enabled()) {
         int line_width_so_far = 0;
 
+        auto glyph_spacing = font().glyph_spacing();
         for (size_t i = 0; i < line.length(); ++i) {
-            auto ch = line.characters()[i];
-            auto glyph_width = font().glyph_width(ch);
-            if ((line_width_so_far + glyph_width) > available_width) {
+            auto codepoint = line.codepoints()[i];
+            auto glyph_width = font().glyph_or_emoji_width(codepoint);
+            if ((line_width_so_far + glyph_width + glyph_spacing) > available_width) {
                 visual_data.visual_line_breaks.append(i);
-                line_width_so_far = glyph_width;
+                line_width_so_far = glyph_width + glyph_spacing;
                 continue;
             }
-            line_width_so_far += glyph_width;
+            line_width_so_far += glyph_width + glyph_spacing;
         }
     }
 
@@ -1409,7 +1465,7 @@ void TextEditor::for_each_visual_line(size_t line_index, Callback callback) cons
     auto& visual_data = m_line_visual_data[line_index];
 
     for (auto visual_line_break : visual_data.visual_line_breaks) {
-        auto visual_line_view = StringView(line.characters() + start_of_line, visual_line_break - start_of_line);
+        auto visual_line_view = Utf32View(line.codepoints() + start_of_line, visual_line_break - start_of_line);
         Gfx::Rect visual_line_rect {
             visual_data.visual_rect.x(),
             visual_data.visual_rect.y() + ((int)visual_line_index * line_height()),
@@ -1551,9 +1607,10 @@ int TextEditor::line_height() const
     return font().glyph_height() + m_line_spacing;
 }
 
-int TextEditor::glyph_width() const
+int TextEditor::fixed_glyph_width() const
 {
-    return font().glyph_width('x');
+    ASSERT(font().is_fixed_width());
+    return font().glyph_width(' ');
 }
 
 }

@@ -40,6 +40,7 @@ namespace JS {
     __ENUMERATE_JS_TOKEN(AsteriskEquals)              \
     __ENUMERATE_JS_TOKEN(Async)                       \
     __ENUMERATE_JS_TOKEN(Await)                       \
+    __ENUMERATE_JS_TOKEN(BigIntLiteral)               \
     __ENUMERATE_JS_TOKEN(BoolLiteral)                 \
     __ENUMERATE_JS_TOKEN(BracketClose)                \
     __ENUMERATE_JS_TOKEN(BracketOpen)                 \
@@ -113,6 +114,7 @@ namespace JS {
     __ENUMERATE_JS_TOKEN(QuestionMark)                \
     __ENUMERATE_JS_TOKEN(QuestionMarkPeriod)          \
     __ENUMERATE_JS_TOKEN(RegexLiteral)                \
+    __ENUMERATE_JS_TOKEN(RegexFlags)                  \
     __ENUMERATE_JS_TOKEN(Return)                      \
     __ENUMERATE_JS_TOKEN(Semicolon)                   \
     __ENUMERATE_JS_TOKEN(ShiftLeft)                   \
@@ -138,6 +140,7 @@ namespace JS {
     __ENUMERATE_JS_TOKEN(Typeof)                      \
     __ENUMERATE_JS_TOKEN(UnsignedShiftRight)          \
     __ENUMERATE_JS_TOKEN(UnsignedShiftRightEquals)    \
+    __ENUMERATE_JS_TOKEN(UnterminatedRegexLiteral)    \
     __ENUMERATE_JS_TOKEN(UnterminatedStringLiteral)   \
     __ENUMERATE_JS_TOKEN(UnterminatedTemplateLiteral) \
     __ENUMERATE_JS_TOKEN(Var)                         \
@@ -172,8 +175,15 @@ public:
     size_t line_number() const { return m_line_number; }
     size_t line_column() const { return m_line_column; }
     double double_value() const;
-    String string_value() const;
     bool bool_value() const;
+
+    enum class StringValueStatus {
+        Ok,
+        MalformedHexEscape,
+        MalformedUnicodeEscape,
+        UnicodeEscapeOverflow,
+    };
+    String string_value(StringValueStatus& status) const;
 
     bool is_identifier_name() const;
 

@@ -39,28 +39,28 @@
 
 int main(int, char**)
 {
-    if (pledge("stdio video thread shared_buffer accept rpath wpath cpath unix proc fattr", nullptr) < 0) {
+    if (pledge("stdio video thread shared_buffer accept rpath wpath cpath unix proc fattr sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     if (unveil("/res", "r") < 0) {
-        perror("unveil");
+        perror("unveil /res");
         return 1;
     }
 
     if (unveil("/tmp", "cw") < 0) {
-        perror("unveil");
+        perror("unveil /tmp cw");
         return 1;
     }
 
     if (unveil("/etc/WindowServer/WindowServer.ini", "rwc") < 0) {
-        perror("unveil");
+        perror("unveil /etc/WindowServer/WindowServer.ini");
         return 1;
     }
 
     if (unveil("/dev", "rw") < 0) {
-        perror("unveil");
+        perror("unveil /dev rw");
         return 1;
     }
 
@@ -97,12 +97,12 @@ int main(int, char**)
     auto mm = WindowServer::MenuManager::construct();
 
     if (unveil("/tmp", "") < 0) {
-        perror("unveil");
+        perror("unveil /tmp");
         return 1;
     }
 
     if (unveil("/dev", "") < 0) {
-        perror("unveil");
+        perror("unveil /dev");
         return 1;
     }
 

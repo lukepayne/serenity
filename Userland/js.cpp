@@ -40,6 +40,7 @@
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Object.h>
 #include <LibJS/Runtime/PrimitiveString.h>
+#include <LibJS/Runtime/RegExpObject.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/Value.h>
 #include <LibLine/Editor.h>
@@ -55,6 +56,7 @@ public:
     virtual ~ReplObject() override;
 
     static JS::Value load_file(JS::Interpreter&);
+    static JS::Value is_strict_mode(JS::Interpreter&);
 
 private:
     virtual const char* class_name() const override { return "ReplObject"; }
@@ -65,8 +67,9 @@ private:
 
 static bool s_dump_ast = false;
 static bool s_print_last_result = false;
-static OwnPtr<Line::Editor> s_editor;
+static RefPtr<Line::Editor> s_editor;
 static int s_repl_line_level = 0;
+static bool s_fail_repl = false;
 
 static String prompt_for_level(int level)
 {
@@ -84,61 +87,113 @@ String read_next_piece()
 {
     StringBuilder piece;
 
+    auto line_level_delta_for_next_line { 0 };
+
     do {
-        String line = s_editor->get_line(prompt_for_level(s_repl_line_level));
+        auto line_result = s_editor->get_line(prompt_for_level(s_repl_line_level));
+
+        line_level_delta_for_next_line = 0;
+
+        if (line_result.is_error()) {
+            s_fail_repl = true;
+            return "";
+        }
+
+        auto& line = line_result.value();
         s_editor->add_to_history(line);
 
         piece.append(line);
         auto lexer = JS::Lexer(line);
+
+        enum {
+            NotInLabelOrObjectKey,
+            InLabelOrObjectKeyIdentifier,
+            InLabelOrObjectKey
+        } label_state { NotInLabelOrObjectKey };
 
         for (JS::Token token = lexer.next(); token.type() != JS::TokenType::Eof; token = lexer.next()) {
             switch (token.type()) {
             case JS::TokenType::BracketOpen:
             case JS::TokenType::CurlyOpen:
             case JS::TokenType::ParenOpen:
+                label_state = NotInLabelOrObjectKey;
                 s_repl_line_level++;
                 break;
             case JS::TokenType::BracketClose:
             case JS::TokenType::CurlyClose:
             case JS::TokenType::ParenClose:
+                label_state = NotInLabelOrObjectKey;
                 s_repl_line_level--;
+                break;
+
+            case JS::TokenType::Identifier:
+            case JS::TokenType::StringLiteral:
+                if (label_state == NotInLabelOrObjectKey)
+                    label_state = InLabelOrObjectKeyIdentifier;
+                else
+                    label_state = NotInLabelOrObjectKey;
+                break;
+            case JS::TokenType::Colon:
+                if (label_state == InLabelOrObjectKeyIdentifier)
+                    label_state = InLabelOrObjectKey;
+                else
+                    label_state = NotInLabelOrObjectKey;
                 break;
             default:
                 break;
             }
         }
-    } while (s_repl_line_level > 0);
+
+        if (label_state == InLabelOrObjectKey) {
+            // If there's a label or object literal key at the end of this line,
+            // prompt for more lines but do not change the line level.
+            line_level_delta_for_next_line += 1;
+        }
+    } while (s_repl_line_level + line_level_delta_for_next_line > 0);
 
     return piece.to_string();
 }
 
 static void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects);
 
-static void print_array(const JS::Array& array, HashTable<JS::Object*>& seen_objects)
+static void print_array(JS::Array& array, HashTable<JS::Object*>& seen_objects)
 {
+    bool first = true;
     fputs("[ ", stdout);
-    for (size_t i = 0; i < array.elements().size(); ++i) {
-        print_value(array.elements()[i], seen_objects);
-        if (i != array.elements().size() - 1)
+    for (auto it = array.indexed_properties().begin(false); it != array.indexed_properties().end(); ++it) {
+        if (!first)
             fputs(", ", stdout);
+        first = false;
+        auto value = it.value_and_attributes(&array).value;
+        // The V8 repl doesn't throw an exception here, and instead just
+        // prints 'undefined'. We may choose to replicate that behavior in
+        // the future, but for now lets just catch the error
+        if (array.interpreter().exception())
+            return;
+        print_value(value, seen_objects);
     }
     fputs(" ]", stdout);
 }
 
-static void print_object(const JS::Object& object, HashTable<JS::Object*>& seen_objects)
+static void print_object(JS::Object& object, HashTable<JS::Object*>& seen_objects)
 {
     fputs("{ ", stdout);
-
-    for (size_t i = 0; i < object.elements().size(); ++i) {
-        if (object.elements()[i].is_empty())
-            continue;
-        printf("\"\033[33;1m%zu\033[0m\": ", i);
-        print_value(object.elements()[i], seen_objects);
-        if (i != object.elements().size() - 1)
+    bool first = true;
+    for (auto& entry : object.indexed_properties()) {
+        if (!first)
             fputs(", ", stdout);
+        first = false;
+        printf("\"\033[33;1m%d\033[0m\": ", entry.index());
+        auto value = entry.value_and_attributes(&object).value;
+        // The V8 repl doesn't throw an exception here, and instead just
+        // prints 'undefined'. We may choose to replicate that behavior in
+        // the future, but for now lets just catch the error
+        if (object.interpreter().exception())
+            return;
+        print_value(value, seen_objects);
     }
 
-    if (!object.elements().is_empty() && object.shape().property_count())
+    if (!object.indexed_properties().is_empty() && object.shape().property_count())
         fputs(", ", stdout);
 
     size_t index = 0;
@@ -170,6 +225,12 @@ static void print_error(const JS::Object& object, HashTable<JS::Object*>&)
         printf(": %s", error.message().characters());
 }
 
+static void print_regexp(const JS::Object& object, HashTable<JS::Object*>&)
+{
+    auto& regexp = static_cast<const JS::RegExpObject&>(object);
+    printf("\033[34;1m/%s/%s\033[0m", regexp.content().characters(), regexp.flags().characters());
+}
+
 void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
 {
     if (value.is_empty()) {
@@ -188,7 +249,7 @@ void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
     }
 
     if (value.is_array())
-        return print_array(static_cast<const JS::Array&>(value.as_object()), seen_objects);
+        return print_array(static_cast<JS::Array&>(value.as_object()), seen_objects);
 
     if (value.is_object()) {
         auto& object = value.as_object();
@@ -198,12 +259,14 @@ void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
             return print_date(object, seen_objects);
         if (object.is_error())
             return print_error(object, seen_objects);
+        if (object.is_regexp_object())
+            return print_regexp(object, seen_objects);
         return print_object(object, seen_objects);
     }
 
     if (value.is_string())
         printf("\033[32;1m");
-    else if (value.is_number())
+    else if (value.is_number() || value.is_bigint())
         printf("\033[35;1m");
     else if (value.is_boolean())
         printf("\033[33;1m");
@@ -213,7 +276,7 @@ void print_value(JS::Value value, HashTable<JS::Object*>& seen_objects)
         printf("\033[34;1m");
     if (value.is_string())
         putchar('"');
-    printf("%s", value.to_string().characters());
+    printf("%s", value.to_string_without_side_effects().characters());
     if (value.is_string())
         putchar('"');
     printf("\033[0m");
@@ -269,6 +332,40 @@ bool write_to_file(const StringView& path)
     return true;
 }
 
+bool parse_and_run(JS::Interpreter& interpreter, const StringView& source)
+{
+    auto parser = JS::Parser(JS::Lexer(source));
+    auto program = parser.parse_program();
+
+    if (s_dump_ast)
+        program->dump(0);
+
+    if (parser.has_errors()) {
+        auto error = parser.errors()[0];
+        auto hint = error.source_location_hint(source);
+        if (!hint.is_empty())
+            printf("%s\n", hint.characters());
+        interpreter.throw_exception<JS::SyntaxError>(error.to_string());
+    } else {
+        interpreter.run(*program);
+    }
+
+    if (interpreter.exception()) {
+        printf("Uncaught exception: ");
+        print(interpreter.exception()->value());
+        auto trace = interpreter.exception()->trace();
+        if (trace.size() > 1) {
+            for (auto& function_name : trace)
+                printf(" -> %s\n", function_name.characters());
+        }
+        interpreter.clear_exception();
+        return false;
+    }
+    if (s_print_last_result)
+        print(interpreter.last_value());
+    return true;
+}
+
 ReplObject::ReplObject()
 {
 }
@@ -276,10 +373,11 @@ ReplObject::ReplObject()
 void ReplObject::initialize()
 {
     GlobalObject::initialize();
-    put_native_function("exit", exit_interpreter);
-    put_native_function("help", repl_help);
-    put_native_function("load", load_file, 1);
-    put_native_function("save", save_to_file, 1);
+    define_property("global", this, JS::Attribute::Enumerable);
+    define_native_function("exit", exit_interpreter);
+    define_native_function("help", repl_help);
+    define_native_function("load", load_file, 1);
+    define_native_function("save", save_to_file, 1);
 }
 
 ReplObject::~ReplObject()
@@ -290,7 +388,7 @@ JS::Value ReplObject::save_to_file(JS::Interpreter& interpreter)
 {
     if (!interpreter.argument_count())
         return JS::Value(false);
-    String save_path = interpreter.argument(0).to_string();
+    String save_path = interpreter.argument(0).to_string_without_side_effects();
     StringView path = StringView(save_path.characters());
     if (write_to_file(path)) {
         return JS::Value(true);
@@ -302,9 +400,10 @@ JS::Value ReplObject::exit_interpreter(JS::Interpreter& interpreter)
 {
     if (!interpreter.argument_count())
         exit(0);
-    int exit_code = interpreter.argument(0).to_number().as_double();
-    exit(exit_code);
-    return JS::js_undefined();
+    auto exit_code = interpreter.argument(0).to_number(interpreter);
+    if (interpreter.exception())
+        return {};
+    exit(exit_code.as_double());
 }
 
 JS::Value ReplObject::repl_help(JS::Interpreter&)
@@ -312,7 +411,8 @@ JS::Value ReplObject::repl_help(JS::Interpreter&)
     printf("REPL commands:\n");
     printf("    exit(code): exit the REPL with specified code. Defaults to 0.\n");
     printf("    help(): display this menu\n");
-    printf("    load(files): Accepts file names as params to load into running session. For example load(\"js/1.js\", \"js/2.js\", \"js/3.js\")\n");
+    printf("    load(files): accepts file names as params to load into running session. For example load(\"js/1.js\", \"js/2.js\", \"js/3.js\")\n");
+    printf("    save(file): accepts a file name, writes REPL input history to a file. For example: save(\"foo.txt\")\n");
     return JS::js_undefined();
 }
 
@@ -335,52 +435,31 @@ JS::Value ReplObject::load_file(JS::Interpreter& interpreter)
         } else {
             source = file_contents;
         }
-        auto parser = JS::Parser(JS::Lexer(source));
-        auto program = parser.parse_program();
-        if (s_dump_ast)
-            program->dump(0);
-
-        if (parser.has_errors())
-            continue;
-
-        interpreter.run(*program);
-        if (s_print_last_result)
-            print(interpreter.last_value());
+        parse_and_run(interpreter, source);
     }
     return JS::Value(true);
 }
 
+JS::Value ReplObject::is_strict_mode(JS::Interpreter& interpreter)
+{
+    return JS::Value(interpreter.in_strict_mode());
+}
+
 void repl(JS::Interpreter& interpreter)
 {
-    while (true) {
+    while (!s_fail_repl) {
         String piece = read_next_piece();
         if (piece.is_empty())
             continue;
         repl_statements.append(piece);
-        auto parser = JS::Parser(JS::Lexer(piece));
-        auto program = parser.parse_program();
-        if (s_dump_ast)
-            program->dump(0);
-
-        if (parser.has_errors()) {
-            printf("Parse error\n");
-            continue;
-        }
-
-        interpreter.run(*program);
-        if (interpreter.exception()) {
-            printf("Uncaught exception: ");
-            print(interpreter.exception()->value());
-            interpreter.clear_exception();
-        } else {
-            print(interpreter.last_value());
-        }
+        parse_and_run(interpreter, piece);
     }
 }
 
 void enable_test_mode(JS::Interpreter& interpreter)
 {
-    interpreter.global_object().put_native_function("load", ReplObject::load_file);
+    interpreter.global_object().define_native_function("load", ReplObject::load_file);
+    interpreter.global_object().define_native_function("isStrictMode", ReplObject::is_strict_mode);
 }
 
 static Function<void()> interrupt_interpreter;
@@ -436,7 +515,7 @@ public:
     virtual JS::Value trace() override
     {
         puts(interpreter().join_arguments().characters());
-        auto trace = interpreter().get_trace();
+        auto trace = get_trace();
         for (auto& function_name : trace) {
             if (function_name.is_empty())
                 function_name = "<anonymous>";
@@ -446,14 +525,14 @@ public:
     }
     virtual JS::Value count() override
     {
-        auto label = interpreter().argument_count() ? interpreter().argument(0).to_string() : "default";
+        auto label = interpreter().argument_count() ? interpreter().argument(0).to_string_without_side_effects() : "default";
         auto counter_value = m_console.counter_increment(label);
         printf("%s: %u\n", label.characters(), counter_value);
         return JS::js_undefined();
     }
     virtual JS::Value count_reset() override
     {
-        auto label = interpreter().argument_count() ? interpreter().argument(0).to_string() : "default";
+        auto label = interpreter().argument_count() ? interpreter().argument(0).to_string_without_side_effects() : "default";
         if (m_console.counter_reset(label)) {
             printf("%s: 0\n", label.characters());
         } else {
@@ -491,6 +570,7 @@ int main(int argc, char** argv)
     };
 
     if (script_path == nullptr) {
+        s_print_last_result = true;
         interpreter = JS::Interpreter::create<ReplObject>();
         ReplConsoleClient console_client(interpreter->console());
         interpreter->console().set_client(console_client);
@@ -498,7 +578,7 @@ int main(int argc, char** argv)
         if (test_mode)
             enable_test_mode(*interpreter);
 
-        s_editor = make<Line::Editor>();
+        s_editor = Line::Editor::construct();
 
         signal(SIGINT, [](int) {
             if (!s_editor->is_editing())
@@ -516,19 +596,15 @@ int main(int argc, char** argv)
                     editor.stylize(span, styles);
             };
             editor.strip_styles();
-            StringBuilder builder;
-            builder.append({ editor.buffer().data(), editor.buffer().size() });
-            // FIXME: The lexer returns weird position information without this
-            builder.append(" ");
-            String str = builder.build();
 
             size_t open_indents = s_repl_line_level;
 
-            JS::Lexer lexer(str, false);
+            auto line = editor.line();
+            JS::Lexer lexer(line);
             bool indenters_starting_line = true;
             for (JS::Token token = lexer.next(); token.type() != JS::TokenType::Eof; token = lexer.next()) {
                 auto length = token.value().length();
-                auto start = token.line_column() - 2;
+                auto start = token.line_column() - 1;
                 auto end = start + length;
                 if (indenters_starting_line) {
                     if (token.type() != JS::TokenType::ParenClose && token.type() != JS::TokenType::BracketClose && token.type() != JS::TokenType::CurlyClose) {
@@ -544,6 +620,7 @@ int main(int argc, char** argv)
                     stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Red), Line::Style::Underline });
                     break;
                 case JS::TokenType::NumericLiteral:
+                case JS::TokenType::BigIntLiteral:
                     stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Magenta) });
                     break;
                 case JS::TokenType::StringLiteral:
@@ -551,6 +628,7 @@ int main(int argc, char** argv)
                 case JS::TokenType::TemplateLiteralEnd:
                 case JS::TokenType::TemplateLiteralString:
                 case JS::TokenType::RegexLiteral:
+                case JS::TokenType::RegexFlags:
                 case JS::TokenType::UnterminatedStringLiteral:
                     stylize({ start, end }, { Line::Style::Foreground(Line::Style::XtermColor::Green), Line::Style::Bold });
                     break;
@@ -654,25 +732,83 @@ int main(int argc, char** argv)
             editor.set_prompt(prompt_for_level(open_indents));
         };
 
-        auto complete = [&interpreter, &editor = *s_editor](const String& token) -> Vector<Line::CompletionSuggestion> {
-            if (token.length() == 0)
-                return {}; // nyeh
+        auto complete = [&interpreter](const Line::Editor& editor) -> Vector<Line::CompletionSuggestion> {
+            auto line = editor.line(editor.cursor());
 
-            StringView line { editor.buffer().data(), editor.cursor() };
+            JS::Lexer lexer { line };
+            enum {
+                Initial,
+                CompleteVariable,
+                CompleteNullProperty,
+                CompleteProperty,
+            } mode { Initial };
+
+            StringView variable_name;
+            StringView property_name;
+
             // we're only going to complete either
             //    - <N>
             //        where N is part of the name of a variable
             //    - <N>.<P>
             //        where N is the complete name of a variable and
             //        P is part of the name of one of its properties
+            auto js_token = lexer.next();
+            for (; js_token.type() != JS::TokenType::Eof; js_token = lexer.next()) {
+                switch (mode) {
+                case CompleteVariable:
+                    switch (js_token.type()) {
+                    case JS::TokenType::Period:
+                        // ...<name> <dot>
+                        mode = CompleteNullProperty;
+                        break;
+                    default:
+                        // not a dot, reset back to initial
+                        mode = Initial;
+                        break;
+                    }
+                    break;
+                case CompleteNullProperty:
+                    if (js_token.is_identifier_name()) {
+                        // ...<name> <dot> <name>
+                        mode = CompleteProperty;
+                        property_name = js_token.value();
+                    } else {
+                        mode = Initial;
+                    }
+                    break;
+                case CompleteProperty:
+                    // something came after the property access, reset to initial
+                case Initial:
+                    if (js_token.is_identifier_name()) {
+                        // ...<name>...
+                        mode = CompleteVariable;
+                        variable_name = js_token.value();
+                    } else {
+                        mode = Initial;
+                    }
+                    break;
+                }
+            }
+
+            bool last_token_has_trivia = js_token.trivia().length() > 0;
+
+            if (mode == CompleteNullProperty) {
+                mode = CompleteProperty;
+                property_name = "";
+                last_token_has_trivia = false; // <name> <dot> [tab] is sensible to complete.
+            }
+
+            if (mode == Initial || last_token_has_trivia)
+                return {}; // we do not know how to complete this
+
             Vector<Line::CompletionSuggestion> results;
 
             Function<void(const JS::Shape&, const StringView&)> list_all_properties = [&results, &list_all_properties](const JS::Shape& shape, auto& property_pattern) {
                 for (const auto& descriptor : shape.property_table()) {
                     if (descriptor.key.view().starts_with(property_pattern)) {
-                        Line::CompletionSuggestion completion { descriptor.key };
+                        Line::CompletionSuggestion completion { descriptor.key, Line::CompletionSuggestion::ForSearch };
                         if (!results.contains_slow(completion)) { // hide duplicates
-                            results.append(completion);
+                            results.append({ descriptor.key });
                         }
                     }
                 }
@@ -681,41 +817,40 @@ int main(int argc, char** argv)
                 }
             };
 
-            if (token.contains(".")) {
-                auto parts = token.split('.', true);
-                // refuse either `.` or `a.b.c`
-                if (parts.size() > 2 || parts.size() == 0)
-                    return {};
-
-                auto name = parts[0];
-                auto property_pattern = parts[1];
-
-                auto maybe_variable = interpreter->get_variable(name);
+            switch (mode) {
+            case CompleteProperty: {
+                auto maybe_variable = interpreter->get_variable(variable_name);
                 if (maybe_variable.is_empty()) {
-                    maybe_variable = interpreter->global_object().get(name);
+                    maybe_variable = interpreter->global_object().get(FlyString(variable_name));
                     if (maybe_variable.is_empty())
-                        return {};
+                        break;
                 }
 
                 auto variable = maybe_variable;
                 if (!variable.is_object())
-                    return {};
+                    break;
 
-                const auto* object = variable.to_object(interpreter->heap());
+                const auto* object = variable.to_object(*interpreter);
                 const auto& shape = object->shape();
-                list_all_properties(shape, property_pattern);
+                list_all_properties(shape, property_name);
                 if (results.size())
-                    editor.suggest(property_pattern.length());
-                return results;
+                    editor.suggest(property_name.length());
+                break;
             }
-            const auto& variable = interpreter->global_object();
-            list_all_properties(variable.shape(), token);
-            if (results.size())
-                editor.suggest(token.length());
+            case CompleteVariable: {
+                const auto& variable = interpreter->global_object();
+                list_all_properties(variable.shape(), variable_name);
+                if (results.size())
+                    editor.suggest(variable_name.length());
+                break;
+            }
+            default:
+                ASSERT_NOT_REACHED();
+            }
+
             return results;
         };
-        s_editor->on_tab_complete_first_token = [complete](auto& value) { return complete(value); };
-        s_editor->on_tab_complete_other_token = [complete](auto& value) { return complete(value); };
+        s_editor->on_tab_complete = move(complete);
         repl(*interpreter);
     } else {
         interpreter = JS::Interpreter::create<JS::GlobalObject>();
@@ -742,27 +877,9 @@ int main(int argc, char** argv)
         } else {
             source = file_contents;
         }
-        auto parser = JS::Parser(JS::Lexer(source));
-        auto program = parser.parse_program();
 
-        if (s_dump_ast)
-            program->dump(0);
-
-        if (parser.has_errors()) {
-            printf("Parse Error\n");
+        if (!parse_and_run(*interpreter, source))
             return 1;
-        }
-
-        auto result = interpreter->run(*program);
-
-        if (interpreter->exception()) {
-            printf("Uncaught exception: ");
-            print(interpreter->exception()->value());
-            interpreter->clear_exception();
-            return 1;
-        }
-        if (s_print_last_result)
-            print(result);
     }
 
     return 0;

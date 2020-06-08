@@ -29,15 +29,19 @@
 #include <AK/HashMap.h>
 #include <AK/ScopeGuard.h>
 #include <AK/StringBuilder.h>
+#include <LibCrypto/BigInt/SignedBigInteger.h>
 #include <LibJS/AST.h>
 #include <LibJS/Interpreter.h>
+#include <LibJS/Runtime/Accessor.h>
 #include <LibJS/Runtime/Array.h>
+#include <LibJS/Runtime/BigInt.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/NativeFunction.h>
 #include <LibJS/Runtime/PrimitiveString.h>
 #include <LibJS/Runtime/Reference.h>
+#include <LibJS/Runtime/RegExpObject.h>
 #include <LibJS/Runtime/ScriptFunction.h>
 #include <LibJS/Runtime/Shape.h>
 #include <LibJS/Runtime/StringObject.h>
@@ -51,14 +55,13 @@ static void update_function_name(Value& value, const FlyString& name)
         return;
     auto& object = value.as_object();
     if (object.is_function()) {
-        auto& function = static_cast<ScriptFunction&>(object);
-        if (function.name().is_empty())
-            function.set_name(name);
+        auto& function = static_cast<Function&>(object);
+        if (function.is_script_function() && function.name().is_empty())
+            static_cast<ScriptFunction&>(function).set_name(name);
     } else if (object.is_array()) {
         auto& array = static_cast<Array&>(object);
-        for (size_t i = 0; i < array.elements().size(); ++i) {
-            update_function_name(array.elements()[i], name);
-        }
+        for (auto& entry : array.indexed_properties().values_unordered())
+            update_function_name(entry.value, name);
     }
 }
 
@@ -67,16 +70,14 @@ Value ScopeNode::execute(Interpreter& interpreter) const
     return interpreter.run(*this);
 }
 
-Value FunctionDeclaration::execute(Interpreter& interpreter) const
+Value FunctionDeclaration::execute(Interpreter&) const
 {
-    auto* function = ScriptFunction::create(interpreter.global_object(), name(), body(), parameters(), function_length(), interpreter.current_environment());
-    interpreter.set_variable(name(), function);
     return js_undefined();
 }
 
 Value FunctionExpression::execute(Interpreter& interpreter) const
 {
-    return ScriptFunction::create(interpreter.global_object(), name(), body(), parameters(), function_length(), interpreter.current_environment());
+    return ScriptFunction::create(interpreter.global_object(), name(), body(), parameters(), function_length(), interpreter.current_environment(), m_is_arrow_function);
 }
 
 Value ExpressionStatement::execute(Interpreter& interpreter) const
@@ -96,7 +97,7 @@ CallExpression::ThisAndCallee CallExpression::compute_this_and_callee(Interprete
         auto object_value = member_expression.object().execute(interpreter);
         if (interpreter.exception())
             return {};
-        auto* this_value = object_value.to_object(interpreter.heap());
+        auto* this_value = object_value.to_object(interpreter);
         if (interpreter.exception())
             return {};
         auto callee = this_value->get(member_expression.computed_property_name(interpreter)).value_or(js_undefined());
@@ -123,9 +124,9 @@ Value CallExpression::execute(Interpreter& interpreter) const
                 expression_string = static_cast<const Identifier&>(*m_callee).string();
             else
                 expression_string = static_cast<const MemberExpression&>(*m_callee).to_string_approximation();
-            error_message = String::format("%s is not a %s (evaluated from '%s')", callee.to_string().characters(), call_type, expression_string.characters());
+            error_message = String::format("%s is not a %s (evaluated from '%s')", callee.to_string_without_side_effects().characters(), call_type, expression_string.characters());
         } else {
-            error_message = String::format("%s is not a %s", callee.to_string().characters(), call_type);
+            error_message = String::format("%s is not a %s", callee.to_string_without_side_effects().characters(), call_type);
         }
         return interpreter.throw_exception<TypeError>(error_message);
     }
@@ -141,20 +142,22 @@ Value CallExpression::execute(Interpreter& interpreter) const
             return {};
         if (m_arguments[i].is_spread) {
             // FIXME: Support generic iterables
-            Vector<Value> iterables;
             if (value.is_string()) {
                 for (auto ch : value.as_string().string())
-                    iterables.append(Value(js_string(interpreter, String::format("%c", ch))));
+                    arguments.append(Value(js_string(interpreter, String::format("%c", ch))));
             } else if (value.is_object() && value.as_object().is_array()) {
-                iterables = static_cast<const Array&>(value.as_object()).elements();
+                auto& array = static_cast<Array&>(value.as_object());
+                for (auto& entry : array.indexed_properties()) {
+                    arguments.append(entry.value_and_attributes(&array).value);
+                    if (interpreter.exception())
+                        return {};
+                }
             } else if (value.is_object() && value.as_object().is_string_object()) {
                 for (auto ch : static_cast<const StringObject&>(value.as_object()).primitive_string().string())
-                    iterables.append(Value(js_string(interpreter, String::format("%c", ch))));
+                    arguments.append(Value(js_string(interpreter, String::format("%c", ch))));
             } else {
-                interpreter.throw_exception<TypeError>(String::format("%s is not iterable", value.to_string().characters()));
+                interpreter.throw_exception<TypeError>(String::format("%s is not iterable", value.to_string_without_side_effects().characters()));
             }
-            for (auto& value : iterables)
-                arguments.append(value);
         } else {
             arguments.append(value);
         }
@@ -280,9 +283,9 @@ Value ForStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                     interpreter.stop_unwind();
-                } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     break;
                 } else {
@@ -301,9 +304,9 @@ Value ForStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Continuable)) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
                     interpreter.stop_unwind();
-                } else if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     break;
                 } else {
@@ -318,6 +321,134 @@ Value ForStatement::execute(Interpreter& interpreter) const
         }
     }
 
+    return last_value;
+}
+
+static FlyString variable_from_for_declaration(Interpreter& interpreter, NonnullRefPtr<ASTNode> node, RefPtr<BlockStatement> wrapper)
+{
+    FlyString variable_name;
+    if (node->is_variable_declaration()) {
+        auto* variable_declaration = static_cast<const VariableDeclaration*>(node.ptr());
+        ASSERT(!variable_declaration->declarations().is_empty());
+        if (variable_declaration->declaration_kind() != DeclarationKind::Var) {
+            wrapper = create_ast_node<BlockStatement>();
+            interpreter.enter_scope(*wrapper, {}, ScopeType::Block);
+        }
+        variable_declaration->execute(interpreter);
+        variable_name = variable_declaration->declarations().first().id().string();
+    } else if (node->is_identifier()) {
+        variable_name = static_cast<const Identifier&>(*node).string();
+    } else {
+        ASSERT_NOT_REACHED();
+    }
+    return variable_name;
+}
+
+Value ForInStatement::execute(Interpreter& interpreter) const
+{
+    if (!m_lhs->is_variable_declaration() && !m_lhs->is_identifier()) {
+        // FIXME: Implement "for (foo.bar in baz)", "for (foo[0] in bar)"
+        ASSERT_NOT_REACHED();
+    }
+    RefPtr<BlockStatement> wrapper;
+    auto variable_name = variable_from_for_declaration(interpreter, m_lhs, wrapper);
+    auto wrapper_cleanup = ScopeGuard([&] {
+        if (wrapper)
+            interpreter.exit_scope(*wrapper);
+    });
+    auto last_value = js_undefined();
+    auto rhs_result = m_rhs->execute(interpreter);
+    if (interpreter.exception())
+        return {};
+    auto* object = rhs_result.to_object(interpreter);
+    while (object) {
+        auto property_names = object->get_own_properties(*object, Object::GetOwnPropertyMode::Key, true);
+        for (auto& property_name : property_names.as_object().indexed_properties()) {
+            interpreter.set_variable(variable_name, property_name.value_and_attributes(object).value);
+            if (interpreter.exception())
+                return {};
+            last_value = interpreter.run(*m_body);
+            if (interpreter.exception())
+                return {};
+            if (interpreter.should_unwind()) {
+                if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
+                    interpreter.stop_unwind();
+                } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
+                    interpreter.stop_unwind();
+                    break;
+                } else {
+                    return js_undefined();
+                }
+            }
+        }
+        object = object->prototype();
+    }
+    return last_value;
+}
+
+Value ForOfStatement::execute(Interpreter& interpreter) const
+{
+    if (!m_lhs->is_variable_declaration() && !m_lhs->is_identifier()) {
+        // FIXME: Implement "for (foo.bar of baz)", "for (foo[0] of bar)"
+        ASSERT_NOT_REACHED();
+    }
+    RefPtr<BlockStatement> wrapper;
+    auto variable_name = variable_from_for_declaration(interpreter, m_lhs, wrapper);
+    auto wrapper_cleanup = ScopeGuard([&] {
+        if (wrapper)
+            interpreter.exit_scope(*wrapper);
+    });
+    auto last_value = js_undefined();
+    auto rhs_result = m_rhs->execute(interpreter);
+    if (interpreter.exception())
+        return {};
+    // FIXME: We need to properly implement the iterator protocol
+    auto is_iterable = rhs_result.is_array() || rhs_result.is_string() || (rhs_result.is_object() && rhs_result.as_object().is_string_object());
+    if (!is_iterable)
+        return interpreter.throw_exception<TypeError>("for..of right-hand side must be iterable");
+
+    size_t index = 0;
+    auto next = [&]() -> Optional<Value> {
+        if (rhs_result.is_array()) {
+            auto& array_elements = rhs_result.as_object().indexed_properties();
+            if (index < array_elements.array_like_size()) {
+                auto result = array_elements.get(&rhs_result.as_object(), index);
+                if (interpreter.exception())
+                    return {};
+                return result.value().value;
+            }
+        } else if (rhs_result.is_string()) {
+            auto string = rhs_result.as_string().string();
+            if (index < string.length())
+                return js_string(interpreter, string.substring(index, 1));
+        } else if (rhs_result.is_object() && rhs_result.as_object().is_string_object()) {
+            auto string = static_cast<StringObject*>(&rhs_result.as_object())->primitive_string().string();
+            if (index < string.length())
+                return js_string(interpreter, string.substring(index, 1));
+        }
+        return {};
+    };
+
+    for (;;) {
+        auto next_item = next();
+        if (!next_item.has_value())
+            break;
+        interpreter.set_variable(variable_name, next_item.value());
+        last_value = interpreter.run(*m_body);
+        if (interpreter.exception())
+            return {};
+        if (interpreter.should_unwind()) {
+            if (interpreter.should_unwind_until(ScopeType::Continuable, m_label)) {
+                interpreter.stop_unwind();
+            } else if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
+                interpreter.stop_unwind();
+                break;
+            } else {
+                return js_undefined();
+            }
+        }
+        ++index;
+    }
     return last_value;
 }
 
@@ -429,15 +560,12 @@ Reference Identifier::to_reference(Interpreter& interpreter) const
 Reference MemberExpression::to_reference(Interpreter& interpreter) const
 {
     auto object_value = m_object->execute(interpreter);
-    if (object_value.is_empty())
-        return {};
-    auto* object = object_value.to_object(interpreter.heap());
-    if (!object)
+    if (interpreter.exception())
         return {};
     auto property_name = computed_property_name(interpreter);
     if (!property_name.is_valid())
         return {};
-    return { object, property_name };
+    return { object_value, property_name };
 }
 
 Value UnaryExpression::execute(Interpreter& interpreter) const
@@ -452,15 +580,31 @@ Value UnaryExpression::execute(Interpreter& interpreter) const
         ASSERT(!reference.is_local_variable());
         if (reference.is_global_variable())
             return interpreter.global_object().delete_property(reference.name());
-        auto* base_object = reference.base().to_object(interpreter.heap());
+        auto* base_object = reference.base().to_object(interpreter);
         if (!base_object)
             return {};
         return base_object->delete_property(reference.name());
     }
 
-    auto lhs_result = m_lhs->execute(interpreter);
-    if (interpreter.exception())
-        return {};
+    Value lhs_result;
+    if (m_op == UnaryOp::Typeof && m_lhs->is_identifier()) {
+        auto reference = m_lhs->to_reference(interpreter);
+        if (interpreter.exception()) {
+            return {};
+        }
+        // FIXME: standard recommends checking with is_unresolvable but it ALWAYS return false here
+        if (reference.is_local_variable() || reference.is_global_variable()) {
+            auto name = reference.name();
+            lhs_result = interpreter.get_variable(name.to_string()).value_or(js_undefined());
+            if (interpreter.exception())
+                return {};
+        }
+    } else {
+        lhs_result = m_lhs->execute(interpreter);
+        if (interpreter.exception())
+            return {};
+    }
+
     switch (m_op) {
     case UnaryOp::BitwiseNot:
         return bitwise_not(interpreter, lhs_result);
@@ -491,6 +635,10 @@ Value UnaryExpression::execute(Interpreter& interpreter) const
             return js_string(interpreter, "object");
         case Value::Type::Boolean:
             return js_string(interpreter, "boolean");
+        case Value::Type::Symbol:
+            return js_string(interpreter, "symbol");
+        case Value::Type::BigInt:
+            return js_string(interpreter, "bigint");
         default:
             ASSERT_NOT_REACHED();
         }
@@ -690,6 +838,12 @@ void NumericLiteral::dump(int indent) const
     printf("NumericLiteral %g\n", m_value);
 }
 
+void BigIntLiteral::dump(int indent) const
+{
+    print_indent(indent);
+    printf("BigIntLiteral %s\n", m_value.characters());
+}
+
 void BooleanLiteral::dump(int indent) const
 {
     print_indent(indent);
@@ -795,6 +949,28 @@ void ForStatement::dump(int indent) const
         test()->dump(indent + 1);
     if (update())
         update()->dump(indent + 1);
+    body().dump(indent + 1);
+}
+
+void ForInStatement::dump(int indent) const
+{
+    ASTNode::dump(indent);
+
+    print_indent(indent);
+    printf("ForIn\n");
+    lhs().dump(indent + 1);
+    rhs().dump(indent + 1);
+    body().dump(indent + 1);
+}
+
+void ForOfStatement::dump(int indent) const
+{
+    ASTNode::dump(indent);
+
+    print_indent(indent);
+    printf("ForOf\n");
+    lhs().dump(indent + 1);
+    rhs().dump(indent + 1);
     body().dump(indent + 1);
 }
 
@@ -939,25 +1115,31 @@ Value UpdateExpression::execute(Interpreter& interpreter) const
     auto reference = m_argument->to_reference(interpreter);
     if (interpreter.exception())
         return {};
-
     auto old_value = reference.get(interpreter);
     if (interpreter.exception())
         return {};
-    old_value = old_value.to_number();
+    old_value = old_value.to_numeric(interpreter);
+    if (interpreter.exception())
+        return {};
 
-    int op_result = 0;
+    Value new_value;
     switch (m_op) {
     case UpdateOp::Increment:
-        op_result = 1;
+        if (old_value.is_number())
+            new_value = Value(old_value.as_double() + 1);
+        else
+            new_value = js_bigint(interpreter, old_value.as_bigint().big_integer().plus(Crypto::SignedBigInteger { 1 }));
         break;
     case UpdateOp::Decrement:
-        op_result = -1;
+        if (old_value.is_number())
+            new_value = Value(old_value.as_double() - 1);
+        else
+            new_value = js_bigint(interpreter, old_value.as_bigint().big_integer().minus(Crypto::SignedBigInteger { 1 }));
         break;
     default:
         ASSERT_NOT_REACHED();
     }
 
-    auto new_value = Value(old_value.as_double() + op_result);
     reference.put(interpreter, new_value);
     if (interpreter.exception())
         return {};
@@ -1126,40 +1308,68 @@ Value ObjectExpression::execute(Interpreter& interpreter) const
         if (interpreter.exception())
             return {};
 
-        if (property.is_spread()) {
+        if (property.type() == ObjectProperty::Type::Spread) {
             if (key_result.is_array()) {
                 auto& array_to_spread = static_cast<Array&>(key_result.as_object());
-                auto& elements = array_to_spread.elements();
-
-                for (size_t i = 0; i < elements.size(); ++i) {
-                    auto element = elements.at(i);
-                    if (!element.is_empty())
-                        object->put_by_index(i, element);
+                for (auto& entry : array_to_spread.indexed_properties()) {
+                    object->indexed_properties().append(entry.value_and_attributes(&array_to_spread).value);
+                    if (interpreter.exception())
+                        return {};
                 }
             } else if (key_result.is_object()) {
                 auto& obj_to_spread = key_result.as_object();
 
                 for (auto& it : obj_to_spread.shape().property_table_ordered()) {
-                    if (it.value.attributes & Attribute::Enumerable)
-                        object->put(it.key, obj_to_spread.get(it.key));
+                    if (it.value.attributes.is_enumerable())
+                        object->define_property(it.key, obj_to_spread.get(it.key));
                 }
             } else if (key_result.is_string()) {
                 auto& str_to_spread = key_result.as_string().string();
 
                 for (size_t i = 0; i < str_to_spread.length(); i++) {
-                    object->put_by_index(i, js_string(interpreter, str_to_spread.substring(i, 1)));
+                    object->define_property(i, js_string(interpreter, str_to_spread.substring(i, 1)));
                 }
             }
 
             continue;
         }
 
-        auto key = key_result.to_string();
+        auto key = key_result.to_string(interpreter);
+        if (interpreter.exception())
+            return {};
         auto value = property.value().execute(interpreter);
         if (interpreter.exception())
             return {};
-        update_function_name(value, key);
-        object->put(key, value);
+
+        String name = key;
+        if (property.type() == ObjectProperty::Type::Getter) {
+            name = String::format("get %s", key.characters());
+        } else if (property.type() == ObjectProperty::Type::Setter) {
+            name = String::format("set %s", key.characters());
+        }
+
+        update_function_name(value, name);
+
+        if (property.type() == ObjectProperty::Type::Getter || property.type() == ObjectProperty::Type::Setter) {
+            ASSERT(value.is_function());
+            Accessor* accessor { nullptr };
+            auto property_metadata = object->shape().lookup(key);
+            if (property_metadata.has_value()) {
+                auto existing_property = object->get_direct(property_metadata.value().offset);
+                if (existing_property.is_accessor())
+                    accessor = &existing_property.as_accessor();
+            }
+            if (!accessor) {
+                accessor = Accessor::create(interpreter, nullptr, nullptr);
+                object->define_property(key, accessor, Attribute::Configurable | Attribute::Enumerable);
+            }
+            if (property.type() == ObjectProperty::Type::Getter)
+                accessor->set_getter(&value.as_function());
+            else
+                accessor->set_setter(&value.as_function());
+        } else {
+            object->define_property(key, value);
+        }
     }
     return object;
 }
@@ -1176,7 +1386,7 @@ PropertyName MemberExpression::computed_property_name(Interpreter& interpreter) 
 {
     if (!is_computed()) {
         ASSERT(m_property->is_identifier());
-        return PropertyName(static_cast<const Identifier&>(*m_property).string());
+        return static_cast<const Identifier&>(*m_property).string();
     }
     auto index = m_property->execute(interpreter);
     if (interpreter.exception())
@@ -1184,14 +1394,13 @@ PropertyName MemberExpression::computed_property_name(Interpreter& interpreter) 
 
     ASSERT(!index.is_empty());
 
-    if (!index.to_number().is_finite_number())
-        return PropertyName(index.to_string());
+    if (index.is_integer() && index.as_i32() >= 0)
+        return index.as_i32();
 
-    auto index_as_double = index.to_double();
-    if (index_as_double < 0 || (i32)index_as_double != index_as_double)
-        return PropertyName(index.to_string());
-
-    return PropertyName(index.to_i32());
+    auto index_string = index.to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    return index_string;
 }
 
 String MemberExpression::to_string_approximation() const
@@ -1210,7 +1419,7 @@ Value MemberExpression::execute(Interpreter& interpreter) const
     auto object_value = m_object->execute(interpreter);
     if (interpreter.exception())
         return {};
-    auto* object_result = object_value.to_object(interpreter.heap());
+    auto* object_result = object_value.to_object(interpreter);
     if (interpreter.exception())
         return {};
     return object_result->get(computed_property_name(interpreter)).value_or(js_undefined());
@@ -1226,6 +1435,11 @@ Value NumericLiteral::execute(Interpreter&) const
     return Value(m_value);
 }
 
+Value BigIntLiteral::execute(Interpreter& interpreter) const
+{
+    return js_bigint(interpreter, Crypto::SignedBigInteger::from_base10(m_value.substring(0, m_value.length() - 1)));
+}
+
 Value BooleanLiteral::execute(Interpreter&) const
 {
     return Value(m_value);
@@ -1234,6 +1448,17 @@ Value BooleanLiteral::execute(Interpreter&) const
 Value NullLiteral::execute(Interpreter&) const
 {
     return js_null();
+}
+
+void RegExpLiteral::dump(int indent) const
+{
+    print_indent(indent);
+    printf("%s (/%s/%s)\n", class_name(), content().characters(), flags().characters());
+}
+
+Value RegExpLiteral::execute(Interpreter& interpreter) const
+{
+    return RegExpObject::create(interpreter.global_object(), content(), flags());
 }
 
 void ArrayExpression::dump(int indent) const
@@ -1264,30 +1489,29 @@ Value ArrayExpression::execute(Interpreter& interpreter) const
                 // FIXME: Support arbitrary iterables
                 if (value.is_array()) {
                     auto& array_to_spread = static_cast<Array&>(value.as_object());
-                    for (auto& it : array_to_spread.elements()) {
-                        if (it.is_empty()) {
-                            array->elements().append(js_undefined());
-                        } else {
-                            array->elements().append(it);
-                        }
+                    for (auto& entry : array_to_spread.indexed_properties()) {
+                        array->indexed_properties().append(entry.value_and_attributes(&array_to_spread).value);
+                        if (interpreter.exception())
+                            return {};
                     }
                     continue;
                 }
                 if (value.is_string() || (value.is_object() && value.as_object().is_string_object())) {
                     String string_to_spread;
-                    if (value.is_string())
+                    if (value.is_string()) {
                         string_to_spread = value.as_string().string();
-                    else
+                    } else {
                         string_to_spread = static_cast<const StringObject&>(value.as_object()).primitive_string().string();
+                    }
                     for (size_t i = 0; i < string_to_spread.length(); ++i)
-                        array->elements().append(js_string(interpreter, string_to_spread.substring(i, 1)));
+                        array->indexed_properties().append(js_string(interpreter, string_to_spread.substring(i, 1)));
                     continue;
                 }
-                interpreter.throw_exception<TypeError>(String::format("%s is not iterable", value.to_string().characters()));
+                interpreter.throw_exception<TypeError>(String::format("%s is not iterable", value.to_string_without_side_effects().characters()));
                 return {};
             }
         }
-        array->elements().append(value);
+        array->indexed_properties().append(value);
     }
     return array;
 }
@@ -1307,7 +1531,10 @@ Value TemplateLiteral::execute(Interpreter& interpreter) const
         auto expr = expression.execute(interpreter);
         if (interpreter.exception())
             return {};
-        string_builder.append(expr.to_string());
+        auto string = expr.to_string(interpreter);
+        if (interpreter.exception())
+            return {};
+        string_builder.append(string);
     }
 
     return js_string(interpreter, string_builder.build());
@@ -1330,7 +1557,7 @@ Value TaggedTemplateLiteral::execute(Interpreter& interpreter) const
     if (interpreter.exception())
         return {};
     if (!tag.is_function()) {
-        interpreter.throw_exception<TypeError>(String::format("%s is not a function", tag.to_string().characters()));
+        interpreter.throw_exception<TypeError>(String::format("%s is not a function", tag.to_string_without_side_effects().characters()));
         return {};
     }
     auto& tag_function = tag.as_function();
@@ -1344,10 +1571,11 @@ Value TaggedTemplateLiteral::execute(Interpreter& interpreter) const
             return {};
         // tag`${foo}`             -> "", foo, ""                -> tag(["", ""], foo)
         // tag`foo${bar}baz${qux}` -> "foo", bar, "baz", qux, "" -> tag(["foo", "baz", ""], bar, qux)
-        if (i % 2 == 0)
-            strings->elements().append(value);
-        else
+        if (i % 2 == 0) {
+            strings->indexed_properties().append(value);
+        } else {
             arguments.append(value);
+        }
     }
 
     auto* raw_strings = Array::create(interpreter.global_object());
@@ -1355,9 +1583,9 @@ Value TaggedTemplateLiteral::execute(Interpreter& interpreter) const
         auto value = raw_string.execute(interpreter);
         if (interpreter.exception())
             return {};
-        raw_strings->elements().append(value);
+        raw_strings->indexed_properties().append(value);
     }
-    strings->put("raw", raw_strings, 0);
+    strings->define_property("raw", raw_strings, 0);
 
     return interpreter.call(tag_function, js_undefined(), move(arguments));
 }
@@ -1453,7 +1681,7 @@ Value SwitchStatement::execute(Interpreter& interpreter) const
             if (interpreter.exception())
                 return {};
             if (interpreter.should_unwind()) {
-                if (interpreter.should_unwind_until(ScopeType::Breakable)) {
+                if (interpreter.should_unwind_until(ScopeType::Breakable, m_label)) {
                     interpreter.stop_unwind();
                     return {};
                 }
@@ -1473,13 +1701,13 @@ Value SwitchCase::execute(Interpreter& interpreter) const
 
 Value BreakStatement::execute(Interpreter& interpreter) const
 {
-    interpreter.unwind(ScopeType::Breakable);
+    interpreter.unwind(ScopeType::Breakable, m_target_label);
     return js_undefined();
 }
 
 Value ContinueStatement::execute(Interpreter& interpreter) const
 {
-    interpreter.unwind(ScopeType::Continuable);
+    interpreter.unwind(ScopeType::Continuable, m_target_label);
     return js_undefined();
 }
 
@@ -1565,6 +1793,11 @@ Value DebuggerStatement::execute(Interpreter&) const
 void ScopeNode::add_variables(NonnullRefPtrVector<VariableDeclaration> variables)
 {
     m_variables.append(move(variables));
+}
+
+void ScopeNode::add_functions(NonnullRefPtrVector<FunctionDeclaration> functions)
+{
+    m_functions.append(move(functions));
 }
 
 }

@@ -45,11 +45,12 @@
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
-//#define CEVENTLOOP_DEBUG
+//#define EVENTLOOP_DEBUG
 //#define DEFERRED_INVOKE_DEBUG
 
 namespace Core {
@@ -94,7 +95,9 @@ public:
             u32 length;
             int nread = m_socket->read((u8*)&length, sizeof(length));
             if (nread == 0) {
+#ifdef EVENTLOOP_DEBUG
                 dbg() << "RPC client disconnected";
+#endif
                 shutdown();
                 return;
             }
@@ -233,29 +236,49 @@ EventLoop::EventLoop()
         ASSERT(rc == 0);
         s_event_loop_stack->append(this);
 
-        auto rpc_path = String::format("/tmp/rpc.%d", getpid());
-        rc = unlink(rpc_path.characters());
-        if (rc < 0 && errno != ENOENT) {
-            perror("unlink");
-            ASSERT_NOT_REACHED();
+        if (!s_rpc_server) {
+            if (!start_rpc_server())
+                dbg() << "Core::EventLoop: Failed to start an RPC server";
         }
-        s_rpc_server = LocalServer::construct();
-        s_rpc_server->set_name("Core::EventLoop_RPC_server");
-        bool listening = s_rpc_server->listen(rpc_path);
-        ASSERT(listening);
-
-        s_rpc_server->on_ready_to_accept = [&] {
-            RPCClient::construct(s_rpc_server->accept());
-        };
     }
 
-#ifdef CEVENTLOOP_DEBUG
+#ifdef EVENTLOOP_DEBUG
     dbg() << getpid() << " Core::EventLoop constructed :)";
 #endif
 }
 
 EventLoop::~EventLoop()
 {
+}
+
+bool EventLoop::start_rpc_server()
+{
+    // Create /tmp/rpc if it doesn't exist.
+    int rc = mkdir("/tmp/rpc", 0777);
+    if (rc == 0) {
+        // Ensure it gets created as 0777 despite our umask.
+        rc = chmod("/tmp/rpc", 0777);
+        if (rc < 0) {
+            perror("chmod /tmp/rpc");
+            // Continue further.
+        }
+    } else if (errno != EEXIST) {
+        perror("mkdir /tmp/rpc");
+        return false;
+    }
+
+    auto rpc_path = String::format("/tmp/rpc/%d", getpid());
+    rc = unlink(rpc_path.characters());
+    if (rc < 0 && errno != ENOENT) {
+        perror("unlink");
+        return false;
+    }
+    s_rpc_server = LocalServer::construct();
+    s_rpc_server->set_name("Core::EventLoop_RPC_server");
+    s_rpc_server->on_ready_to_accept = [&] {
+        RPCClient::construct(s_rpc_server->accept());
+    };
+    return s_rpc_server->listen(rpc_path);
 }
 
 EventLoop& EventLoop::main()
@@ -273,14 +296,18 @@ EventLoop& EventLoop::current()
 
 void EventLoop::quit(int code)
 {
+#ifdef EVENTLOOP_DEBUG
     dbg() << "Core::EventLoop::quit(" << code << ")";
+#endif
     m_exit_requested = true;
     m_exit_code = code;
 }
 
 void EventLoop::unquit()
 {
+#ifdef EVENTLOOP_DEBUG
     dbg() << "Core::EventLoop::unquit()";
+#endif
     m_exit_requested = false;
     m_exit_code = 0;
 }
@@ -320,8 +347,7 @@ int EventLoop::exec()
 
 void EventLoop::pump(WaitMode mode)
 {
-    if (m_queued_events.is_empty())
-        wait_for_event(mode);
+    wait_for_event(mode);
 
     decltype(m_queued_events) events;
     {
@@ -333,7 +359,7 @@ void EventLoop::pump(WaitMode mode)
         auto& queued_event = events.at(i);
         auto* receiver = queued_event.receiver.ptr();
         auto& event = *queued_event.event;
-#ifdef CEVENTLOOP_DEBUG
+#ifdef EVENTLOOP_DEBUG
         if (receiver)
             dbg() << "Core::EventLoop: " << *receiver << " event " << (int)event.type();
 #endif
@@ -343,7 +369,10 @@ void EventLoop::pump(WaitMode mode)
                 ASSERT_NOT_REACHED();
                 return;
             default:
+#ifdef EVENTLOOP_DEBUG
                 dbg() << "Event type " << event.type() << " with no receiver :(";
+#endif
+                break;
             }
         } else if (event.type() == Event::Type::DeferredInvoke) {
 #ifdef DEFERRED_INVOKE_DEBUG
@@ -357,7 +386,7 @@ void EventLoop::pump(WaitMode mode)
 
         if (m_exit_requested) {
             LOCKER(m_private->lock);
-#ifdef CEVENTLOOP_DEBUG
+#ifdef EVENTLOOP_DEBUG
             dbg() << "Core::EventLoop: Exit requested. Rejigging " << (events.size() - i) << " events.";
 #endif
             decltype(m_queued_events) new_event_queue;
@@ -374,7 +403,7 @@ void EventLoop::pump(WaitMode mode)
 void EventLoop::post_event(Object& receiver, NonnullOwnPtr<Event>&& event)
 {
     LOCKER(m_private->lock);
-#ifdef CEVENTLOOP_DEBUG
+#ifdef EVENTLOOP_DEBUG
     dbg() << "Core::EventLoop::post_event: {" << m_queued_events.size() << "} << receiver=" << receiver << ", event=" << event;
 #endif
     m_queued_events.empend(receiver, move(event));
@@ -415,14 +444,14 @@ void EventLoop::wait_for_event(WaitMode mode)
     timeval now;
     struct timeval timeout = { 0, 0 };
     bool should_wait_forever = false;
-    if (mode == WaitMode::WaitForEvents) {
-        if (!s_timers->is_empty() && queued_events_is_empty) {
+    if (mode == WaitMode::WaitForEvents && queued_events_is_empty) {
+        auto next_timer_expiration = get_next_timer_expiration();
+        if (next_timer_expiration.has_value()) {
             timespec now_spec;
             clock_gettime(CLOCK_MONOTONIC, &now_spec);
             now.tv_sec = now_spec.tv_sec;
             now.tv_usec = now_spec.tv_nsec / 1000;
-            get_next_timer_expiration(timeout);
-            timeval_sub(timeout, now, timeout);
+            timeval_sub(next_timer_expiration.value(), now, timeout);
             if (timeout.tv_sec < 0) {
                 timeout.tv_sec = 0;
                 timeout.tv_usec = 0;
@@ -430,8 +459,6 @@ void EventLoop::wait_for_event(WaitMode mode)
         } else {
             should_wait_forever = true;
         }
-    } else {
-        should_wait_forever = false;
     }
 
     int marked_fd_count = Core::safe_syscall(select, max_fd + 1, &rfds, &wfds, nullptr, should_wait_forever ? nullptr : &timeout);
@@ -461,7 +488,7 @@ void EventLoop::wait_for_event(WaitMode mode)
             && !it.value->owner->is_visible_for_timer_purposes()) {
             continue;
         }
-#ifdef CEVENTLOOP_DEBUG
+#ifdef EVENTLOOP_DEBUG
         dbg() << "Core::EventLoop: Timer " << timer.timer_id << " has expired, sending Core::TimerEvent to " << timer.owner;
 #endif
         post_event(*timer.owner, make<TimerEvent>(timer.timer_id));
@@ -500,10 +527,9 @@ void EventLoopTimer::reload(const timeval& now)
     fire_time.tv_usec += (interval % 1000) * 1000;
 }
 
-void EventLoop::get_next_timer_expiration(timeval& soonest)
+Optional<struct timeval> EventLoop::get_next_timer_expiration()
 {
-    ASSERT(!s_timers->is_empty());
-    bool has_checked_any = false;
+    Optional<struct timeval> soonest {};
     for (auto& it : *s_timers) {
         auto& fire_time = it.value->fire_time;
         if (it.value->fire_when_not_visible == TimerShouldFireWhenNotVisible::No
@@ -511,10 +537,10 @@ void EventLoop::get_next_timer_expiration(timeval& soonest)
             && !it.value->owner->is_visible_for_timer_purposes()) {
             continue;
         }
-        if (!has_checked_any || fire_time.tv_sec < soonest.tv_sec || (fire_time.tv_sec == soonest.tv_sec && fire_time.tv_usec < soonest.tv_usec))
+        if (!soonest.has_value() || fire_time.tv_sec < soonest.value().tv_sec || (fire_time.tv_sec == soonest.value().tv_sec && fire_time.tv_usec < soonest.value().tv_usec))
             soonest = fire_time;
-        has_checked_any = true;
     }
+    return soonest;
 }
 
 int EventLoop::register_timer(Object& object, int milliseconds, bool should_reload, TimerShouldFireWhenNotVisible fire_when_not_visible)

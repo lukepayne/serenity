@@ -27,6 +27,7 @@
 #pragma once
 
 #include <AK/Forward.h>
+#include <LibWeb/DOM/AttributeNames.h>
 #include <LibWeb/Forward.h>
 #include <LibWeb/TreeNode.h>
 
@@ -39,7 +40,7 @@ public:
     {
         const Element* found_element = nullptr;
         static_cast<const NodeType*>(this)->template for_each_in_subtree_of_type<Element>([&](auto& element) {
-            if (element.attribute("id") == id) {
+            if (element.attribute(HTML::AttributeNames::id) == id) {
                 found_element = &element;
                 return IterationDecision::Break;
             }
@@ -53,7 +54,7 @@ public:
     }
 
 protected:
-    NonElementParentNode() {}
+    NonElementParentNode() { }
 };
 
 }

@@ -48,7 +48,7 @@ public:
 
     static Lockable<HashTable<IPv4Socket*>>& all_sockets();
 
-    virtual void close() override;
+    virtual KResult close() override;
     virtual KResult bind(const sockaddr*, socklen_t) override;
     virtual KResult connect(FileDescription&, const sockaddr*, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
     virtual KResult listen(size_t) override;
@@ -63,7 +63,7 @@ public:
     virtual KResult setsockopt(int level, int option, const void*, socklen_t) override;
     virtual KResult getsockopt(FileDescription&, int level, int option, void*, socklen_t*) override;
 
-    virtual int ioctl(FileDescription&, unsigned request, unsigned arg) override;
+    virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg) override;
 
     bool did_receive(const IPv4Address& peer_address, u16 peer_port, KBuffer&&);
 

@@ -24,11 +24,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <LibGUI/Painter.h>
+#include <LibGUI/ScrollBar.h>
+#include <LibGUI/Widget.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/StylePainter.h>
-#include <LibGUI/Painter.h>
-#include <LibGUI/Widget.h>
+#include <LibWeb/DOM/Document.h>
+#include <LibWeb/Frame/Frame.h>
 #include <LibWeb/Layout/LayoutWidget.h>
+#include <LibWeb/PageView.h>
 
 namespace Web {
 
@@ -36,6 +40,10 @@ LayoutWidget::LayoutWidget(const Element& element, GUI::Widget& widget)
     : LayoutReplaced(element, StyleProperties::create())
     , m_widget(widget)
 {
+    set_has_intrinsic_width(true);
+    set_has_intrinsic_height(true);
+    set_intrinsic_width(widget.width());
+    set_intrinsic_height(widget.height());
 }
 
 LayoutWidget::~LayoutWidget()
@@ -43,11 +51,18 @@ LayoutWidget::~LayoutWidget()
     widget().remove_from_parent();
 }
 
-void LayoutWidget::layout()
+void LayoutWidget::did_set_rect()
 {
-    rect().set_size(widget().width(), widget().height());
-    LayoutReplaced::layout();
-    widget().move_to(rect().x(), rect().y());
+    LayoutReplaced::did_set_rect();
+    update_widget();
+}
+
+void LayoutWidget::update_widget()
+{
+    auto adjusted_widget_position = rect().location().to_int_point();
+    if (auto* page_view = document().frame()->page_view())
+        adjusted_widget_position.move_by(-page_view->horizontal_scrollbar().value(), -page_view->vertical_scrollbar().value());
+    widget().move_to(adjusted_widget_position);
 }
 
 void LayoutWidget::render(RenderingContext& context)

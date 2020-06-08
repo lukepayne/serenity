@@ -16,6 +16,10 @@ try {
     };
     assert(addBlock(5, 4) === 9);
 
+    let chompy = [(x) => x, 2];
+    assert(chompy.length === 2);
+    assert(chompy[0](1) === 1); 
+
     const makeObject = (a, b) => ({ a, b });
     const obj = makeObject(33, 44);
     assert(typeof obj === "object");
@@ -54,6 +58,60 @@ try {
         return x / 2;
     })(10);
     assert(half === 5);
+
+    var foo, bar;
+    foo = bar, baz => {};
+    assert(foo === undefined);
+    assert(bar === undefined);
+
+    function FooBar() {
+      this.x = {
+        y: () => this,
+        z: function () {
+          return (() => this)();
+        }
+      };
+    }
+
+    var foobar = new FooBar();
+    assert(foobar.x.y() === foobar);
+    assert(foobar.x.z() === foobar.x);
+
+    var Baz = () => {};
+
+    assert(Baz.prototype === undefined);
+
+    assertThrowsError(() => {
+        new Baz();
+    }, {
+        error: TypeError,
+        message: "Baz is not a constructor"
+    });
+
+    (() => {
+        "use strict";
+        assert(isStrictMode());
+
+        (() => {
+            assert(isStrictMode());
+        })();
+    })();
+
+    (() => {
+        'use strict';
+        assert(isStrictMode());
+    })();
+
+    (() => {
+        assert(!isStrictMode());
+
+        (() => {
+            "use strict";
+            assert(isStrictMode());
+        })();
+
+        assert(!isStrictMode());
+    })();
 
     console.log("PASS");
 } catch {

@@ -30,6 +30,8 @@
 #include <AK/HashMap.h>
 #include <AK/String.h>
 #include <AK/Vector.h>
+#include <AK/Weakable.h>
+#include <LibJS/AST.h>
 #include <LibJS/Console.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Heap.h>
@@ -69,7 +71,7 @@ struct Argument {
 
 typedef Vector<Argument, 8> ArgumentVector;
 
-class Interpreter {
+class Interpreter : public Weakable<Interpreter> {
 public:
     template<typename GlobalObjectType, typename... Args>
     static NonnullOwnPtr<Interpreter> create(Args&&... args)
@@ -89,9 +91,18 @@ public:
 
     Heap& heap() { return m_heap; }
 
-    void unwind(ScopeType type) { m_unwind_until = type; }
+    void unwind(ScopeType type, FlyString label = {})
+    {
+        m_unwind_until = type;
+        m_unwind_until_label = label;
+    }
     void stop_unwind() { m_unwind_until = ScopeType::None; }
-    bool should_unwind_until(ScopeType type) const { return m_unwind_until == type; }
+    bool should_unwind_until(ScopeType type, FlyString label) const
+    {
+        if (m_unwind_until_label.is_null())
+            return m_unwind_until == type;
+        return m_unwind_until == type && m_unwind_until_label == label;
+    }
     bool should_unwind() const { return m_unwind_until != ScopeType::None; }
 
     Value get_variable(const FlyString& name);
@@ -104,7 +115,7 @@ public:
     void enter_scope(const ScopeNode&, ArgumentVector, ScopeType);
     void exit_scope(const ScopeNode&);
 
-    Value call(Function&, Value this_value = {}, Optional<MarkedValueList> arguments = {});
+    Value call(Function&, Value this_value, Optional<MarkedValueList> arguments = {});
     Value construct(Function&, Function& new_target, Optional<MarkedValueList> arguments = {});
 
     CallFrame& push_call_frame()
@@ -121,6 +132,8 @@ public:
 
     const LexicalEnvironment* current_environment() const { return m_call_stack.last().environment; }
     LexicalEnvironment* current_environment() { return m_call_stack.last().environment; }
+
+    bool in_strict_mode() const { return m_scope_stack.last().scope_node->in_strict_mode(); }
 
     size_t argument_count() const
     {
@@ -168,7 +181,6 @@ public:
     const Console& console() const { return m_console; }
 
     String join_arguments() const;
-    Vector<String> get_trace() const;
 
 private:
     Interpreter();
@@ -185,6 +197,7 @@ private:
     Exception* m_exception { nullptr };
 
     ScopeType m_unwind_until { ScopeType::None };
+    FlyString m_unwind_until_label;
 
     Console m_console;
 };

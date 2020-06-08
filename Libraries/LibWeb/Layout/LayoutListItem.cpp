@@ -38,14 +38,18 @@ LayoutListItem::~LayoutListItem()
 {
 }
 
-void LayoutListItem::layout()
+void LayoutListItem::layout(LayoutMode layout_mode)
 {
     if (m_marker) {
         remove_child(*m_marker);
         m_marker = nullptr;
     }
 
-    LayoutBlock::layout();
+    LayoutBlock::layout(layout_mode);
+
+    if (style().string_or_fallback(CSS::PropertyID::ListStyleType, "disc") == "none") {
+        return;
+    }
 
     if (!m_marker) {
         m_marker = adopt(*new LayoutListItemMarker);

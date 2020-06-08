@@ -27,7 +27,7 @@
 #include "Editor.h"
 #include "EditorWrapper.h"
 #include <AK/ByteBuffer.h>
-#include <AK/FileSystemPath.h>
+#include <AK/LexicalPath.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibGUI/Application.h>
@@ -40,7 +40,7 @@
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/HTMLHeadElement.h>
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/HtmlView.h>
+#include <LibWeb/PageView.h>
 #include <LibWeb/Parser/HTMLParser.h>
 
 // #define EDITOR_DEBUG
@@ -50,7 +50,7 @@ Editor::Editor()
     m_documentation_tooltip_window = GUI::Window::construct();
     m_documentation_tooltip_window->set_rect(0, 0, 500, 400);
     m_documentation_tooltip_window->set_window_type(GUI::WindowType::Tooltip);
-    m_documentation_html_view = m_documentation_tooltip_window->set_main_widget<Web::HtmlView>();
+    m_documentation_page_view = m_documentation_tooltip_window->set_main_widget<Web::PageView>();
 }
 
 Editor::~Editor()
@@ -107,11 +107,6 @@ void Editor::paint_event(GUI::PaintEvent& event)
         painter.draw_rect(rect, palette().selection());
     }
 
-    if (m_hovering_lines_ruler)
-        window()->set_override_cursor(GUI::StandardCursor::Arrow);
-    else if (m_hovering_editor)
-        window()->set_override_cursor(m_hovering_link && m_holding_ctrl ? GUI::StandardCursor::Hand : GUI::StandardCursor::IBeam);
-
     if (ruler_visible()) {
         size_t first_visible_line = text_position_at(event.rect().top_left()).line();
         size_t last_visible_line = text_position_at(event.rect().bottom_right()).line();
@@ -137,7 +132,7 @@ static HashMap<String, String>& man_paths()
         Core::DirIterator it("/usr/share/man/man2", Core::DirIterator::Flags::SkipDots);
         while (it.has_next()) {
             auto path = String::format("/usr/share/man/man2/%s", it.next_path().characters());
-            auto title = FileSystemPath(path).title();
+            auto title = LexicalPath(path).title();
             paths.set(title, path);
         }
     }
@@ -169,15 +164,14 @@ void Editor::show_documentation_tooltip_if_available(const String& hovered_token
         return;
     }
 
-    Markdown::Document man_document;
-    bool success = man_document.parse(file->read_all());
+    auto man_document = Markdown::Document::parse(file->read_all());
 
-    if (!success) {
+    if (!man_document) {
         dbg() << "failed to parse markdown";
         return;
     }
 
-    auto html_text = man_document.render_to_html();
+    auto html_text = man_document->render_to_html();
 
     auto html_document = Web::parse_html_document(html_text);
     if (!html_document) {
@@ -194,7 +188,7 @@ void Editor::show_documentation_tooltip_if_available(const String& hovered_token
     ASSERT(head_element);
     head_element->append_child(style_element);
 
-    m_documentation_html_view->set_document(html_document);
+    m_documentation_page_view->set_document(html_document);
     m_documentation_tooltip_window->move_to(screen_location.translated(4, 4));
     m_documentation_tooltip_window->show();
 
@@ -218,11 +212,15 @@ void Editor::mousemove_event(GUI::MouseEvent& event)
     if (!highlighter)
         return;
 
-    auto ruler_line_rect = ruler_content_rect(text_position.line());
-    m_hovering_lines_ruler = (event.position().x() < ruler_line_rect.width());
-
     bool hide_tooltip = true;
     bool is_over_link = false;
+
+    auto ruler_line_rect = ruler_content_rect(text_position.line());
+    auto hovering_lines_ruler = (event.position().x() < ruler_line_rect.width());
+    if (hovering_lines_ruler && !is_in_drag_select())
+        window()->set_override_cursor(GUI::StandardCursor::Arrow);
+    else if (m_hovering_editor)
+        window()->set_override_cursor(m_hovering_link && m_holding_ctrl ? GUI::StandardCursor::Hand : GUI::StandardCursor::IBeam);
 
     for (auto& span : document().spans()) {
         if (span.range.contains(m_previous_text_position) && !span.range.contains(text_position)) {
@@ -234,7 +232,8 @@ void Editor::mousemove_event(GUI::MouseEvent& event)
 
         if (span.range.contains(text_position)) {
             auto adjusted_range = span.range;
-            adjusted_range.end().set_column(adjusted_range.end().column() + 1);
+            auto end_line_length = document().line(span.range.end().line()).length();
+            adjusted_range.end().set_column(min(end_line_length, adjusted_range.end().column() + 1));
             auto hovered_span_text = document().text_in_range(adjusted_range);
 #ifdef EDITOR_DEBUG
             dbg() << "Hovering: " << adjusted_range << " \"" << hovered_span_text << "\"";
@@ -272,7 +271,7 @@ void Editor::mousedown_event(GUI::MouseEvent& event)
 
     auto text_position = text_position_at(event.position());
     auto ruler_line_rect = ruler_content_rect(text_position.line());
-    if (event.position().x() < ruler_line_rect.width()) {
+    if (event.button() == GUI::MouseButton::Left && event.position().x() < ruler_line_rect.width()) {
         if (!m_breakpoint_lines.contains_slow(text_position.line())) {
             m_breakpoint_lines.append(text_position.line());
             on_breakpoint_change(wrapper().filename_label().text(), text_position.line(), BreakpointChange::Added);

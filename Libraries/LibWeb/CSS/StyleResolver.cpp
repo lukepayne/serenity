@@ -60,7 +60,7 @@ template<typename Callback>
 void StyleResolver::for_each_stylesheet(Callback callback) const
 {
     callback(default_stylesheet());
-    for (auto& sheet : document().stylesheets()) {
+    for (auto& sheet : document().style_sheets().sheets()) {
         callback(sheet);
     }
 }
@@ -190,7 +190,7 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
                 if (auto value = parse_line_style(parts[0])) {
                     set_property_border_style(style, value.release_nonnull());
                     set_property_border_color(style, ColorStyleValue::create(Gfx::Color::Black));
-                    set_property_border_width(style, LengthStyleValue::create(Length(3, Length::Type::Absolute)));
+                    set_property_border_width(style, LengthStyleValue::create(Length(3, Length::Type::Px)));
                     return;
                 }
             }
@@ -253,6 +253,17 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
         style.set_property(CSS::PropertyID::BorderRightColor, value);
         style.set_property(CSS::PropertyID::BorderBottomColor, value);
         style.set_property(CSS::PropertyID::BorderLeftColor, value);
+        return;
+    }
+
+    if (property_id == CSS::PropertyID::Background) {
+        auto parts = split_on_whitespace(value.to_string());
+        NonnullRefPtrVector<StyleValue> values;
+        for (auto& part : parts) {
+            values.append(parse_css_value(part));
+        }
+        if (values[0].is_color())
+            style.set_property(CSS::PropertyID::BackgroundColor, values[0]);
         return;
     }
 
@@ -348,6 +359,15 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
         return;
     }
 
+    if (property_id == CSS::PropertyID::ListStyle) {
+        auto parts = split_on_whitespace(value.to_string());
+        if (!parts.is_empty()) {
+            auto value = parse_css_value(parts[0]);
+            style.set_property(CSS::PropertyID::ListStyleType, value);
+        }
+        return;
+    }
+
     style.set_property(property_id, value);
 }
 
@@ -371,7 +391,7 @@ NonnullRefPtr<StyleProperties> StyleResolver::resolve_style(const Element& eleme
         }
     }
 
-    auto style_attribute = element.attribute("style");
+    auto style_attribute = element.attribute(HTML::AttributeNames::style);
     if (!style_attribute.is_null()) {
         if (auto declaration = parse_css_declaration(style_attribute)) {
             for (auto& property : declaration->properties()) {

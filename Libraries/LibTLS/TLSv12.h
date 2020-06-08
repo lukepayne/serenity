@@ -40,14 +40,14 @@
 
 namespace TLS {
 
-inline static void print_buffer(const ByteBuffer& buffer)
+inline void print_buffer(const ByteBuffer& buffer)
 {
     for (size_t i { 0 }; i < buffer.size(); ++i)
         dbgprintf("%02x ", buffer[i]);
     dbgprintf("\n");
 }
 
-inline static void print_buffer(const u8* buffer, size_t size)
+inline void print_buffer(const u8* buffer, size_t size)
 {
     for (size_t i { 0 }; i < size; ++i)
         dbgprintf("%02x ", buffer[i]);
@@ -142,6 +142,7 @@ enum class Error : i8 {
     FeatureNotSupported = -17,
     DecryptionFailed = -20,
     NeedMoreData = -21,
+    TimedOut = -22,
 };
 
 enum class AlertLevel : u8 {
@@ -293,27 +294,13 @@ struct Context {
     StringView negotiated_alpn;
 
     size_t send_retries { 0 };
+
+    time_t handshake_initiation_timestamp { 0 };
 };
 
 class TLSv12 : public Core::Socket {
     C_OBJECT(TLSv12)
 public:
-    explicit TLSv12(Core::Object* parent, Version version = Version::V12)
-        : Core::Socket(Core::Socket::Type::TCP, parent)
-    {
-        m_context.version = version;
-        m_context.is_server = false;
-        m_context.tls_buffer = ByteBuffer::create_uninitialized(0);
-        int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
-        if (fd < 0) {
-            set_error(errno);
-        } else {
-            set_fd(fd);
-            set_mode(IODevice::ReadWrite);
-            set_error(0);
-        }
-    }
-
     ByteBuffer& write_buffer() { return m_context.tls_buffer; }
     bool is_established() const { return m_context.connection_status == ConnectionStatus::Established; }
     virtual bool connect(const String&, int) override;
@@ -351,7 +338,7 @@ public:
     ByteBuffer read(size_t max_size);
 
     bool write(const ByteBuffer& buffer);
-    void alert(bool critical, u8 code);
+    void alert(AlertLevel, AlertDescription);
 
     bool can_read_line() const { return m_context.application_buffer.size() && memchr(m_context.application_buffer.data(), '\n', m_context.application_buffer.size()); }
     bool can_read() const { return m_context.application_buffer.size() > 0; }
@@ -364,6 +351,8 @@ public:
     Function<void()> on_tls_finished;
 
 private:
+    explicit TLSv12(Core::Object* parent, Version version = Version::V12);
+
     virtual bool common_connect(const struct sockaddr*, socklen_t) override;
 
     void consume(const ByteBuffer& record);
@@ -389,6 +378,10 @@ private:
     void build_random(PacketBuilder&);
 
     bool flush();
+    void write_into_socket();
+    void read_from_socket();
+
+    bool check_connection_state(bool read);
 
     ssize_t handle_hello(const ByteBuffer& buffer, WritePacketStage&);
     ssize_t handle_finished(const ByteBuffer& buffer, WritePacketStage&);
@@ -476,6 +469,11 @@ private:
 
     OwnPtr<Crypto::Cipher::AESCipher::CBCMode> m_aes_local;
     OwnPtr<Crypto::Cipher::AESCipher::CBCMode> m_aes_remote;
+
+    bool m_has_scheduled_write_flush { false };
+    i32 m_max_wait_time_for_handshake_in_seconds { 10 };
+
+    RefPtr<Core::Timer> m_handshake_timeout_timer;
 };
 
 namespace Constants {

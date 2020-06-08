@@ -25,6 +25,7 @@
  */
 
 #include <LibWeb/CSS/SelectorEngine.h>
+#include <LibWeb/DOM/AttributeNames.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/Text.h>
@@ -75,6 +76,10 @@ bool matches(const Selector::SimpleSelector& component, const Element& element)
         if (element.first_child_of_type<Element>() || element.first_child_of_type<Text>())
             return false;
         break;
+    case Selector::SimpleSelector::PseudoClass::Root:
+        if (!element.is_html_element())
+            return false;
+        break;
     }
 
     switch (component.attribute_match_type) {
@@ -94,7 +99,7 @@ bool matches(const Selector::SimpleSelector& component, const Element& element)
     case Selector::SimpleSelector::Type::Universal:
         return true;
     case Selector::SimpleSelector::Type::Id:
-        return component.value == element.attribute("id");
+        return component.value == element.attribute(HTML::AttributeNames::id);
     case Selector::SimpleSelector::Type::Class:
         return element.has_class(component.value);
     case Selector::SimpleSelector::Type::TagName:

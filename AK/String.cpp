@@ -278,15 +278,9 @@ bool String::starts_with(char ch) const
     return characters()[0] == ch;
 }
 
-bool String::ends_with(const StringView& str) const
+bool String::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
 {
-    if (str.is_empty())
-        return true;
-    if (is_empty())
-        return false;
-    if (str.length() > length())
-        return false;
-    return !memcmp(characters() + (length() - str.length()), str.characters_without_null_termination(), str.length());
+    return StringUtils::ends_with(*this, str, case_sensitivity);
 }
 
 bool String::ends_with(char ch) const
@@ -369,18 +363,42 @@ int String::replace(const String& needle, const String& replacement, bool all_oc
     return positions.size();
 }
 
-String String::trim_spaces() const
+String String::trim_whitespace(TrimMode mode) const
 {
-    size_t start = 0;
-    size_t end = length();
-    while (characters()[start] == ' ')
-        ++start;
-    while (characters()[end] == ' ') {
-        if (end <= start)
-            return "";
-        --end;
+    auto is_whitespace_character = [](char ch) -> bool {
+        return ch == '\t'
+            || ch == '\n'
+            || ch == '\v'
+            || ch == '\f'
+            || ch == '\r'
+            || ch == ' ';
+    };
+
+    size_t substring_start = 0;
+    size_t substring_length = length();
+
+    if (mode == TrimMode::Left || mode == TrimMode::Both) {
+        for (size_t i = 0; i < length(); ++i) {
+            if (substring_length == 0)
+                return "";
+            if (!is_whitespace_character(characters()[i]))
+                break;
+            ++substring_start;
+            --substring_length;
+        }
     }
-    return substring(start, end - start);
+
+    if (mode == TrimMode::Right || mode == TrimMode::Both) {
+        for (size_t i = length() - 1; i > 0; --i) {
+            if (substring_length == 0)
+                return "";
+            if (!is_whitespace_character(characters()[i]))
+                break;
+            --substring_length;
+        }
+    }
+
+    return substring(substring_start, substring_length);
 }
 
 String escape_html_entities(const StringView& html)

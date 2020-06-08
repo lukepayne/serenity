@@ -34,6 +34,7 @@
 #include <AK/QuickSort.h>
 #include <AK/StdLibExtras.h>
 #include <AK/StringBuilder.h>
+#include <AK/Utf32View.h>
 #include <AK/Utf8View.h>
 #include <LibGfx/CharacterBitmap.h>
 #include <LibGfx/Path.h>
@@ -229,6 +230,25 @@ void Painter::fill_rect_with_gradient(Orientation orientation, const Rect& a_rec
 void Painter::fill_rect_with_gradient(const Rect& a_rect, Color gradient_start, Color gradient_end)
 {
     return fill_rect_with_gradient(Orientation::Horizontal, a_rect, gradient_start, gradient_end);
+}
+
+void Painter::fill_ellipse(const Rect& a_rect, Color color)
+{
+    auto rect = a_rect.translated(translation()).intersected(clip_rect());
+    if (rect.is_empty())
+        return;
+
+    ASSERT(m_target->rect().contains(rect));
+
+    RGBA32* dst = m_target->scanline(rect.top()) + rect.left() + rect.width() / 2;
+    const size_t dst_skip = m_target->pitch() / sizeof(RGBA32);
+
+    for (int i = 0; i < rect.height(); i++) {
+        double y = rect.height() * 0.5 - i;
+        double x = rect.width() * sqrt(0.25 - y * y / rect.height() / rect.height());
+        fast_u32_fill(dst - (int)x, color.value(), 2 * (int)x);
+        dst += dst_skip;
+    }
 }
 
 void Painter::draw_ellipse_intersecting(const Rect& rect, Color color, int thickness)
@@ -763,14 +783,14 @@ void Painter::draw_scaled_bitmap(const Rect& a_dst_rect, const Gfx::Bitmap& sour
     }
 }
 
-FLATTEN void Painter::draw_glyph(const Point& point, char ch, Color color)
+FLATTEN void Painter::draw_glyph(const Point& point, u32 codepoint, Color color)
 {
-    draw_glyph(point, ch, font(), color);
+    draw_glyph(point, codepoint, font(), color);
 }
 
-FLATTEN void Painter::draw_glyph(const Point& point, char ch, const Font& font, Color color)
+FLATTEN void Painter::draw_glyph(const Point& point, u32 codepoint, const Font& font, Color color)
 {
-    draw_bitmap(point, font.glyph_bitmap(ch), color);
+    draw_bitmap(point, font.glyph_bitmap(codepoint), color);
 }
 
 void Painter::draw_emoji(const Point& point, const Gfx::Bitmap& emoji, const Font& font)
@@ -790,9 +810,9 @@ void Painter::draw_emoji(const Point& point, const Gfx::Bitmap& emoji, const Fon
 
 void Painter::draw_glyph_or_emoji(const Point& point, u32 codepoint, const Font& font, Color color)
 {
-    if (codepoint < 256) {
+    if (codepoint < (u32)font.glyph_count()) {
         // This looks like a regular character.
-        draw_glyph(point, (char)codepoint, font, color);
+        draw_glyph(point, (size_t)codepoint, font, color);
         return;
     }
 
@@ -874,7 +894,78 @@ void Painter::draw_text_line(const Rect& a_rect, const Utf8View& text, const Fon
     }
 }
 
+void Painter::draw_text_line(const Rect& a_rect, const Utf32View& text, const Font& font, TextAlignment alignment, Color color, TextElision elision)
+{
+    auto rect = a_rect;
+    Utf32View final_text(text);
+    Vector<u32> elided_text;
+    if (elision == TextElision::Right) {
+        int text_width = font.width(final_text);
+        if (font.width(final_text) > rect.width()) {
+            int glyph_spacing = font.glyph_spacing();
+            int new_width = font.width("...");
+            if (new_width < text_width) {
+                size_t i = 0;
+                for (; i < text.length(); ++i) {
+                    u32 codepoint = text.codepoints()[i];
+                    int glyph_width = font.glyph_or_emoji_width(codepoint);
+                    // NOTE: Glyph spacing should not be added after the last glyph on the line,
+                    //       but since we are here because the last glyph does not actually fit on the line,
+                    //       we don't have to worry about spacing.
+                    int width_with_this_glyph_included = new_width + glyph_width + glyph_spacing;
+                    if (width_with_this_glyph_included > rect.width())
+                        break;
+                    new_width += glyph_width + glyph_spacing;
+                }
+                elided_text.clear();
+                elided_text.append(final_text.codepoints(), i);
+                elided_text.append('.');
+                elided_text.append('.');
+                elided_text.append('.');
+                final_text = Utf32View { elided_text.data(), elided_text.size() };
+            }
+        }
+    }
+
+    switch (alignment) {
+    case TextAlignment::TopLeft:
+    case TextAlignment::CenterLeft:
+        break;
+    case TextAlignment::TopRight:
+    case TextAlignment::CenterRight:
+        rect.set_x(rect.right() - font.width(final_text));
+        break;
+    case TextAlignment::Center: {
+        auto shrunken_rect = rect;
+        shrunken_rect.set_width(font.width(final_text));
+        shrunken_rect.center_within(rect);
+        rect = shrunken_rect;
+        break;
+    }
+    default:
+        ASSERT_NOT_REACHED();
+    }
+
+    auto point = rect.location();
+    int space_width = font.glyph_width(' ') + font.glyph_spacing();
+
+    for (size_t i = 0; i < final_text.length(); ++i) {
+        auto codepoint = final_text.codepoints()[i];
+        if (codepoint == ' ') {
+            point.move_by(space_width, 0);
+            continue;
+        }
+        draw_glyph_or_emoji(point, codepoint, font, color);
+        point.move_by(font.glyph_or_emoji_width(codepoint) + font.glyph_spacing(), 0);
+    }
+}
+
 void Painter::draw_text(const Rect& rect, const StringView& text, TextAlignment alignment, Color color, TextElision elision)
+{
+    draw_text(rect, text, font(), alignment, color, elision);
+}
+
+void Painter::draw_text(const Rect& rect, const Utf32View& text, TextAlignment alignment, Color color, TextElision elision)
 {
     draw_text(rect, text, font(), alignment, color, elision);
 }
@@ -897,6 +988,63 @@ void Painter::draw_text(const Rect& rect, const StringView& raw_text, const Font
 
     if (start_of_current_line != text.byte_length()) {
         Utf8View line = text.substring_view(start_of_current_line, text.byte_length() - start_of_current_line);
+        lines.append(line);
+    }
+
+    static const int line_spacing = 4;
+    int line_height = font.glyph_height() + line_spacing;
+    Rect bounding_rect { 0, 0, 0, (static_cast<int>(lines.size()) * line_height) - line_spacing };
+
+    for (auto& line : lines) {
+        auto line_width = font.width(line);
+        if (line_width > bounding_rect.width())
+            bounding_rect.set_width(line_width);
+    }
+
+    switch (alignment) {
+    case TextAlignment::TopLeft:
+        bounding_rect.set_location(rect.location());
+        break;
+    case TextAlignment::TopRight:
+        bounding_rect.set_location({ (rect.right() + 1) - bounding_rect.width(), rect.y() });
+        break;
+    case TextAlignment::CenterLeft:
+        bounding_rect.set_location({ rect.x(), rect.center().y() - (bounding_rect.height() / 2) });
+        break;
+    case TextAlignment::CenterRight:
+        bounding_rect.set_location({ (rect.right() + 1) - bounding_rect.width(), rect.center().y() - (bounding_rect.height() / 2) });
+        break;
+    case TextAlignment::Center:
+        bounding_rect.center_within(rect);
+        break;
+    default:
+        ASSERT_NOT_REACHED();
+    }
+
+    for (size_t i = 0; i < lines.size(); ++i) {
+        auto& line = lines[i];
+        Rect line_rect { bounding_rect.x(), bounding_rect.y() + static_cast<int>(i) * line_height, bounding_rect.width(), line_height };
+        line_rect.intersect(rect);
+        draw_text_line(line_rect, line, font, alignment, color, elision);
+    }
+}
+
+void Painter::draw_text(const Rect& rect, const Utf32View& text, const Font& font, TextAlignment alignment, Color color, TextElision elision)
+{
+    Vector<Utf32View, 32> lines;
+
+    size_t start_of_current_line = 0;
+    for (size_t i = 0; i < text.length(); ++i) {
+        u32 codepoint = text.codepoints()[i];
+        if (codepoint == '\n') {
+            Utf32View line = text.substring_view(start_of_current_line, i - start_of_current_line);
+            lines.append(line);
+            start_of_current_line = i + 1;
+        }
+    }
+
+    if (start_of_current_line != text.length()) {
+        Utf32View line = text.substring_view(start_of_current_line, text.length() - start_of_current_line);
         lines.append(line);
     }
 
@@ -1135,7 +1283,7 @@ void Painter::draw_quadratic_bezier_curve(const Point& control_point, const Poin
 
 void Painter::add_clip_rect(const Rect& rect)
 {
-    state().clip_rect.intersect(rect.translated(m_clip_origin.location()));
+    state().clip_rect.intersect(rect.translated(translation()));
     state().clip_rect.intersect(m_target->rect());
 }
 

@@ -42,7 +42,7 @@ Array* Array::create(GlobalObject& global_object)
 Array::Array(Object& prototype)
     : Object(&prototype)
 {
-    put_native_property("length", length_getter, length_setter, Attribute::Writable);
+    define_native_property("length", length_getter, length_setter, Attribute::Writable);
 }
 
 Array::~Array()
@@ -51,7 +51,7 @@ Array::~Array()
 
 Array* array_from(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (!this_object->is_array()) {
@@ -66,7 +66,7 @@ Value Array::length_getter(Interpreter& interpreter)
     auto* array = array_from(interpreter);
     if (!array)
         return {};
-    return Value(array->length());
+    return Value(static_cast<i32>(array->indexed_properties().array_like_size()));
 }
 
 void Array::length_setter(Interpreter& interpreter, Value value)
@@ -74,12 +74,14 @@ void Array::length_setter(Interpreter& interpreter, Value value)
     auto* array = array_from(interpreter);
     if (!array)
         return;
-    auto length = value.to_number();
+    auto length = value.to_number(interpreter);
+    if (interpreter.exception())
+        return;
     if (length.is_nan() || length.is_infinity() || length.as_double() < 0) {
         interpreter.throw_exception<RangeError>("Invalid array length");
         return;
     }
-    array->elements().resize(length.as_double());
+    array->indexed_properties().set_array_like_size(length.as_double());
 }
 
 }

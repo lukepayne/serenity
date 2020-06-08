@@ -83,22 +83,22 @@ public:
 
     virtual RefPtr<Inode> get_inode(InodeIdentifier) const = 0;
 
-    virtual void flush_writes() {}
+    virtual void flush_writes() { }
 
-    int block_size() const { return m_block_size; }
+    size_t block_size() const { return m_block_size; }
 
     virtual bool is_file_backed() const { return false; }
 
 protected:
     FS();
 
-    void set_block_size(int);
+    void set_block_size(size_t);
 
     mutable Lock m_lock { "FS" };
 
 private:
     unsigned m_fsid { 0 };
-    int m_block_size { 0 };
+    size_t m_block_size { 0 };
     bool m_readonly { false };
 };
 

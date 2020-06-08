@@ -40,6 +40,7 @@
 namespace JS {
 
 class VariableDeclaration;
+class FunctionDeclaration;
 
 template<class T, class... Args>
 static inline NonnullRefPtr<T>
@@ -70,6 +71,12 @@ private:
 };
 
 class Statement : public ASTNode {
+public:
+    const FlyString& label() const { return m_label; }
+    void set_label(FlyString string) { m_label = string; }
+
+protected:
+    FlyString m_label;
 };
 
 class EmptyStatement final : public Statement {
@@ -118,7 +125,11 @@ public:
     virtual void dump(int indent) const override;
 
     void add_variables(NonnullRefPtrVector<VariableDeclaration>);
+    void add_functions(NonnullRefPtrVector<FunctionDeclaration>);
     const NonnullRefPtrVector<VariableDeclaration>& variables() const { return m_variables; }
+    const NonnullRefPtrVector<FunctionDeclaration>& functions() const { return m_functions; }
+    bool in_strict_mode() const { return m_strict_mode; }
+    void set_strict_mode() { m_strict_mode = true; }
 
 protected:
     ScopeNode() { }
@@ -127,6 +138,8 @@ private:
     virtual bool is_scope_node() const final { return true; }
     NonnullRefPtrVector<Statement> m_children;
     NonnullRefPtrVector<VariableDeclaration> m_variables;
+    NonnullRefPtrVector<FunctionDeclaration> m_functions;
+    bool m_strict_mode { false };
 };
 
 class Program : public ScopeNode {
@@ -165,6 +178,7 @@ public:
     const FlyString& name() const { return m_name; }
     const Statement& body() const { return *m_body; }
     const Vector<Parameter>& parameters() const { return m_parameters; };
+    i32 function_length() const { return m_function_length; }
 
 protected:
     FunctionNode(const FlyString& name, NonnullRefPtr<Statement> body, Vector<Parameter> parameters, i32 function_length, NonnullRefPtrVector<VariableDeclaration> variables)
@@ -179,7 +193,6 @@ protected:
     void dump(int indent, const char* class_name) const;
 
     const NonnullRefPtrVector<VariableDeclaration>& variables() const { return m_variables; }
-    i32 function_length() const { return m_function_length; }
 
 private:
     FlyString m_name;
@@ -207,13 +220,15 @@ private:
     virtual const char* class_name() const override { return "FunctionDeclaration"; }
 };
 
-class FunctionExpression final : public Expression
+class FunctionExpression final
+    : public Expression
     , public FunctionNode {
 public:
     static bool must_have_name() { return false; }
 
-    FunctionExpression(const FlyString& name, NonnullRefPtr<Statement> body, Vector<Parameter> parameters, i32 function_length, NonnullRefPtrVector<VariableDeclaration> variables)
+    FunctionExpression(const FlyString& name, NonnullRefPtr<Statement> body, Vector<Parameter> parameters, i32 function_length, NonnullRefPtrVector<VariableDeclaration> variables, bool is_arrow_function = false)
         : FunctionNode(name, move(body), move(parameters), function_length, move(variables))
+        , m_is_arrow_function(is_arrow_function)
     {
     }
 
@@ -222,6 +237,8 @@ public:
 
 private:
     virtual const char* class_name() const override { return "FunctionExpression"; }
+
+    bool m_is_arrow_function;
 };
 
 class ErrorExpression final : public Expression {
@@ -338,6 +355,54 @@ private:
     RefPtr<ASTNode> m_init;
     RefPtr<Expression> m_test;
     RefPtr<Expression> m_update;
+    NonnullRefPtr<Statement> m_body;
+};
+
+class ForInStatement : public Statement {
+public:
+    ForInStatement(NonnullRefPtr<ASTNode> lhs, NonnullRefPtr<Expression> rhs, NonnullRefPtr<Statement> body)
+        : m_lhs(move(lhs))
+        , m_rhs(move(rhs))
+        , m_body(move(body))
+    {
+    }
+
+    const ASTNode& lhs() const { return *m_lhs; }
+    const Expression& rhs() const { return *m_rhs; }
+    const Statement& body() const { return *m_body; }
+
+    virtual Value execute(Interpreter&) const override;
+    virtual void dump(int indent) const override;
+
+private:
+    virtual const char* class_name() const override { return "ForInStatement"; }
+
+    NonnullRefPtr<ASTNode> m_lhs;
+    NonnullRefPtr<Expression> m_rhs;
+    NonnullRefPtr<Statement> m_body;
+};
+
+class ForOfStatement : public Statement {
+public:
+    ForOfStatement(NonnullRefPtr<ASTNode> lhs, NonnullRefPtr<Expression> rhs, NonnullRefPtr<Statement> body)
+        : m_lhs(move(lhs))
+        , m_rhs(move(rhs))
+        , m_body(move(body))
+    {
+    }
+
+    const ASTNode& lhs() const { return *m_lhs; }
+    const Expression& rhs() const { return *m_rhs; }
+    const Statement& body() const { return *m_body; }
+
+    virtual Value execute(Interpreter&) const override;
+    virtual void dump(int indent) const override;
+
+private:
+    virtual const char* class_name() const override { return "ForOfStatement"; }
+
+    NonnullRefPtr<ASTNode> m_lhs;
+    NonnullRefPtr<Expression> m_rhs;
     NonnullRefPtr<Statement> m_body;
 };
 
@@ -493,6 +558,22 @@ private:
     double m_value { 0 };
 };
 
+class BigIntLiteral final : public Literal {
+public:
+    explicit BigIntLiteral(String value)
+        : m_value(move(value))
+    {
+    }
+
+    virtual Value execute(Interpreter&) const override;
+    virtual void dump(int indent) const override;
+
+private:
+    virtual const char* class_name() const override { return "BigIntLiteral"; }
+
+    String m_value;
+};
+
 class StringLiteral final : public Literal {
 public:
     explicit StringLiteral(String value)
@@ -518,6 +599,27 @@ public:
 
 private:
     virtual const char* class_name() const override { return "NullLiteral"; }
+};
+
+class RegExpLiteral final : public Literal {
+public:
+    explicit RegExpLiteral(String content, String flags)
+        : m_content(content)
+        , m_flags(flags)
+    {
+    }
+
+    virtual Value execute(Interpreter&) const override;
+    virtual void dump(int indent) const override;
+
+    const String& content() const { return m_content; }
+    const String& flags() const { return m_flags; }
+
+private:
+    virtual const char* class_name() const override { return "RegexLiteral"; }
+
+    String m_content;
+    String m_flags;
 };
 
 class Identifier final : public Expression {
@@ -678,6 +780,11 @@ enum class DeclarationKind {
 
 class VariableDeclarator final : public ASTNode {
 public:
+    VariableDeclarator(NonnullRefPtr<Identifier> id)
+        : m_id(move(id))
+    {
+    }
+
     VariableDeclarator(NonnullRefPtr<Identifier> id, RefPtr<Expression> init)
         : m_id(move(id))
         , m_init(move(init))
@@ -722,17 +829,28 @@ private:
 
 class ObjectProperty final : public ASTNode {
 public:
-    ObjectProperty(NonnullRefPtr<Expression> key, NonnullRefPtr<Expression> value)
+    enum class Type {
+        KeyValue,
+        Getter,
+        Setter,
+        Spread,
+    };
+
+    ObjectProperty(NonnullRefPtr<Expression> key, RefPtr<Expression> value, Type property_type)
         : m_key(move(key))
         , m_value(move(value))
+        , m_property_type(property_type)
     {
     }
 
     const Expression& key() const { return m_key; }
-    const Expression& value() const { return m_value; }
+    const Expression& value() const
+    {
+        ASSERT(m_value);
+        return *m_value;
+    }
 
-    bool is_spread() const { return m_is_spread; }
-    void set_is_spread() { m_is_spread = true; }
+    Type type() const { return m_property_type; }
 
     virtual void dump(int indent) const override;
     virtual Value execute(Interpreter&) const override;
@@ -741,8 +859,8 @@ private:
     virtual const char* class_name() const override { return "ObjectProperty"; }
 
     NonnullRefPtr<Expression> m_key;
-    NonnullRefPtr<Expression> m_value;
-    bool m_is_spread { false };
+    RefPtr<Expression> m_value;
+    Type m_property_type;
 };
 
 class ObjectExpression : public Expression {
@@ -977,22 +1095,36 @@ private:
 
 class BreakStatement final : public Statement {
 public:
-    BreakStatement() { }
+    BreakStatement(FlyString target_label)
+        : m_target_label(target_label)
+    {
+    }
 
     virtual Value execute(Interpreter&) const override;
 
+    const FlyString& target_label() const { return m_target_label; }
+
 private:
     virtual const char* class_name() const override { return "BreakStatement"; }
+
+    FlyString m_target_label;
 };
 
 class ContinueStatement final : public Statement {
 public:
-    ContinueStatement() { }
+    ContinueStatement(FlyString target_label)
+        : m_target_label(target_label)
+    {
+    }
 
     virtual Value execute(Interpreter&) const override;
 
+    const FlyString& target_label() const { return m_target_label; }
+
 private:
     virtual const char* class_name() const override { return "ContinueStatement"; }
+
+    FlyString m_target_label;
 };
 
 class DebuggerStatement final : public Statement {

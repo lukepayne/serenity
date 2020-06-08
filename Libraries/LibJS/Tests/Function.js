@@ -26,6 +26,16 @@ try {
     assert(new Function().name === "anonymous");
     assert(new Function().toString() === "function anonymous() {\n  ???\n}");
 
+    assertThrowsError(() => {
+        new Function("[");
+    }, {
+        error: SyntaxError,
+        // This might be confusing at first but keep in mind it's actually parsing
+        // function anonymous() { [ }
+        // This is in line with what other engines are reporting.
+        message: "Unexpected token CurlyClose. Expected BracketClose (line: 1, column: 26)"
+    });
+
     console.log("PASS");
 } catch (e) {
     console.log("FAIL: " + e.message);

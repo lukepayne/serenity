@@ -37,6 +37,7 @@
 #include <LibJS/Forward.h>
 #include <LibWeb/CSS/StyleResolver.h>
 #include <LibWeb/CSS/StyleSheet.h>
+#include <LibWeb/CSS/StyleSheetList.h>
 #include <LibWeb/DOM/NonElementParentNode.h>
 #include <LibWeb/DOM/ParentNode.h>
 
@@ -52,9 +53,11 @@ public:
     virtual ~Document() override;
 
     void set_url(const URL& url) { m_url = url; }
-    const URL& url() const { return m_url; }
+    URL url() const { return m_url; }
 
     Origin origin() const;
+
+    bool is_scripting_enabled() const { return true; }
 
     URL complete_url(const String&) const;
 
@@ -63,8 +66,8 @@ public:
     StyleResolver& style_resolver() { return *m_style_resolver; }
     const StyleResolver& style_resolver() const { return *m_style_resolver; }
 
-    void add_sheet(const StyleSheet& sheet) { m_sheets.append(sheet); }
-    const NonnullRefPtrVector<StyleSheet>& stylesheets() const { return m_sheets; }
+    CSS::StyleSheetList& style_sheets() { return *m_style_sheets; }
+    const CSS::StyleSheetList& style_sheets() const { return *m_style_sheets; }
 
     virtual FlyString tag_name() const override { return "#document"; }
 
@@ -106,7 +109,6 @@ public:
 
     void update_style();
     void update_layout();
-    Function<void()> on_layout_updated;
 
     virtual bool is_child_allowed(const Node&) const override;
 
@@ -116,6 +118,7 @@ public:
     void schedule_style_update();
 
     Vector<const Element*> get_elements_by_name(const String&) const;
+    RefPtr<Element> query_selector(const StringView&);
     NonnullRefPtrVector<Element> query_selector_all(const StringView&);
 
     const String& source() const { return m_source; }
@@ -128,11 +131,24 @@ public:
     NonnullRefPtr<Element> create_element(const String& tag_name);
     NonnullRefPtr<Text> create_text_node(const String& data);
 
+    void set_pending_parsing_blocking_script(Badge<HTMLScriptElement>, HTMLScriptElement*);
+    HTMLScriptElement* pending_parsing_blocking_script() { return m_pending_parsing_blocking_script; }
+    NonnullRefPtr<HTMLScriptElement> take_pending_parsing_blocking_script(Badge<HTMLDocumentParser>);
+
+    void add_script_to_execute_when_parsing_has_finished(Badge<HTMLScriptElement>, HTMLScriptElement&);
+    NonnullRefPtrVector<HTMLScriptElement> take_scripts_to_execute_when_parsing_has_finished(Badge<HTMLDocumentParser>);
+
+    void add_script_to_execute_as_soon_as_possible(Badge<HTMLScriptElement>, HTMLScriptElement&);
+    NonnullRefPtrVector<HTMLScriptElement> take_scripts_to_execute_as_soon_as_possible(Badge<HTMLDocumentParser>);
+
+    bool in_quirks_mode() const { return m_quirks_mode; }
+    void set_quirks_mode(bool mode) { m_quirks_mode = mode; }
+
 private:
     virtual RefPtr<LayoutNode> create_layout_node(const StyleProperties* parent_style) const override;
 
     OwnPtr<StyleResolver> m_style_resolver;
-    NonnullRefPtrVector<StyleSheet> m_sheets;
+    RefPtr<CSS::StyleSheetList> m_style_sheets;
     RefPtr<Node> m_hovered_node;
     RefPtr<Node> m_inspected_node;
     WeakPtr<Frame> m_frame;
@@ -151,6 +167,12 @@ private:
     String m_source;
 
     OwnPtr<JS::Interpreter> m_interpreter;
+
+    RefPtr<HTMLScriptElement> m_pending_parsing_blocking_script;
+    NonnullRefPtrVector<HTMLScriptElement> m_scripts_to_execute_when_parsing_has_finished;
+    NonnullRefPtrVector<HTMLScriptElement> m_scripts_to_execute_as_soon_as_possible;
+
+    bool m_quirks_mode { false };
 };
 
 template<>

@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/Random.h>
 #include <LibCrypto/BigInt/UnsignedBigInteger.h>
 
 //#define NT_DEBUG
@@ -33,7 +34,7 @@
 namespace Crypto {
 namespace NumberTheory {
 
-static auto ModularInverse(const UnsignedBigInteger& a_, const UnsignedBigInteger& b) -> UnsignedBigInteger
+inline UnsignedBigInteger ModularInverse(const UnsignedBigInteger& a_, const UnsignedBigInteger& b)
 {
     if (b == 1)
         return { 1 };
@@ -120,7 +121,7 @@ static auto ModularInverse(const UnsignedBigInteger& a_, const UnsignedBigIntege
     return temp_remainder;
 }
 
-static auto ModularPower(const UnsignedBigInteger& b, const UnsignedBigInteger& e, const UnsignedBigInteger& m) -> UnsignedBigInteger
+static UnsignedBigInteger ModularPower(const UnsignedBigInteger& b, const UnsignedBigInteger& e, const UnsignedBigInteger& m)
 {
     if (m == 1)
         return 0;
@@ -160,6 +161,30 @@ static auto ModularPower(const UnsignedBigInteger& b, const UnsignedBigInteger& 
     return exp;
 }
 
+// Note: This function _will_ generate extremely huge numbers, and in doing so,
+//       it will allocate and free a lot of memory!
+//       Please use |ModularPower| if your use-case is modexp.
+template<typename IntegerType>
+static IntegerType Power(const IntegerType& b, const IntegerType& e)
+{
+    IntegerType ep { e };
+    IntegerType base { b };
+    IntegerType exp { 1 };
+
+    while (!(ep < IntegerType { 1 })) {
+        if (ep.words()[0] % 2 == 1)
+            exp.set_to(exp.multiplied_by(base));
+
+        // ep = ep / 2;
+        ep.set_to(ep.divided_by(IntegerType { 2 }).quotient);
+
+        // base = base * base
+        base.set_to(base.multiplied_by(base));
+    }
+
+    return exp;
+}
+
 static void GCD_without_allocation(
     const UnsignedBigInteger& a,
     const UnsignedBigInteger& b,
@@ -195,7 +220,7 @@ static void GCD_without_allocation(
     }
 }
 
-static UnsignedBigInteger GCD(const UnsignedBigInteger& a, const UnsignedBigInteger& b)
+inline UnsignedBigInteger GCD(const UnsignedBigInteger& a, const UnsignedBigInteger& b)
 {
     UnsignedBigInteger temp_a;
     UnsignedBigInteger temp_b;
@@ -212,7 +237,7 @@ static UnsignedBigInteger GCD(const UnsignedBigInteger& a, const UnsignedBigInte
     return output;
 }
 
-static auto LCM(const UnsignedBigInteger& a, const UnsignedBigInteger& b) -> UnsignedBigInteger
+inline UnsignedBigInteger LCM(const UnsignedBigInteger& a, const UnsignedBigInteger& b)
 {
     UnsignedBigInteger temp_a;
     UnsignedBigInteger temp_b;
@@ -289,7 +314,7 @@ static UnsignedBigInteger random_number(const UnsignedBigInteger& min, const Uns
     // FIXME: Need a cryptographically secure rng
     auto size = range.trimmed_length() * sizeof(u32);
     u8 buf[size];
-    arc4random_buf(buf, size);
+    AK::fill_with_random(buf, size);
     Vector<u32> vec;
     for (size_t i = 0; i < size / sizeof(u32); ++i) {
         vec.append(*(u32*)buf + i);
@@ -313,7 +338,7 @@ static bool is_probably_prime(const UnsignedBigInteger& p)
     return MR_primality_test(p, tests);
 }
 
-static UnsignedBigInteger random_big_prime(size_t bits)
+inline static UnsignedBigInteger random_big_prime(size_t bits)
 {
     ASSERT(bits >= 33);
     UnsignedBigInteger min = UnsignedBigInteger::from_base10("6074001000").shift_left(bits - 33);

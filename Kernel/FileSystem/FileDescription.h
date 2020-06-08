@@ -34,7 +34,7 @@
 #include <Kernel/FileSystem/InodeMetadata.h>
 #include <Kernel/FileSystem/VirtualFileSystem.h>
 #include <Kernel/KBuffer.h>
-#include <LibBareMetal/Memory/VirtualAddress.h>
+#include <Kernel/VirtualAddress.h>
 
 namespace Kernel {
 
@@ -65,7 +65,7 @@ public:
         set_writable(options & O_WRONLY);
     }
 
-    int close();
+    KResult close();
 
     off_t seek(off_t, int whence);
     ssize_t read(u8*, ssize_t);
@@ -79,7 +79,7 @@ public:
 
     ssize_t get_dir_entries(u8* buffer, ssize_t);
 
-    ByteBuffer read_entire_file();
+    KResultOr<ByteBuffer> read_entire_file();
 
     String absolute_path() const;
 

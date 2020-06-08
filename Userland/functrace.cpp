@@ -34,6 +34,7 @@
 #include <AK/kmalloc.h>
 #include <Kernel/Syscall.h>
 #include <LibC/sys/arch/i386/regs.h>
+#include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <LibDebug/DebugSession.h>
 #include <LibELF/Image.h>
@@ -46,13 +47,8 @@
 #include <string.h>
 #include <unistd.h>
 
-static int usage()
-{
-    printf("usage: functrace [command...]\n");
-    return 1;
-}
-
 OwnPtr<DebugSession> g_debug_session;
+static bool g_should_output_color = false;
 
 static void handle_sigint(int)
 {
@@ -75,8 +71,8 @@ void print_syscall(PtraceRegisters& regs, size_t depth)
     for (size_t i = 0; i < depth; ++i) {
         printf("  ");
     }
-    const char* begin_color = "\033[34;1m";
-    const char* end_color = "\033[0m";
+    const char* begin_color = g_should_output_color ? "\033[34;1m" : "";
+    const char* end_color = g_should_output_color ? "\033[0m" : "";
     printf("=> %sSC_%s(0x%x, 0x%x, 0x%x)%s\n",
         begin_color,
         Syscall::to_string(
@@ -115,23 +111,24 @@ NonnullOwnPtr<HashMap<void*, X86::Instruction>> instrument_code()
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio proc exec rpath", nullptr) < 0) {
+    if (pledge("stdio proc exec rpath sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
-    if (argc == 1)
-        return usage();
+    if (isatty(STDOUT_FILENO))
+        g_should_output_color = true;
 
-    StringBuilder command;
-    command.append(argv[1]);
-    for (int i = 2; i < argc; ++i) {
-        command.appendf("%s ", argv[i]);
-    }
+    const char* command = nullptr;
+    Core::ArgsParser args_parser;
+    args_parser.add_positional_argument(command,
+        "The program to be traced, along with its arguments",
+        "program", Core::ArgsParser::Required::Yes);
+    args_parser.parse(argc, argv);
 
-    auto result = DebugSession::exec_and_attach(command.to_string());
+    auto result = DebugSession::exec_and_attach(command);
     if (!result) {
-        fprintf(stderr, "Failed to start debugging session for: \"%s\"\n", command.to_string().characters());
+        fprintf(stderr, "Failed to start debugging session for: \"%s\"\n", command);
         exit(1);
     }
     g_debug_session = result.release_nonnull();

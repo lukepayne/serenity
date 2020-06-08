@@ -88,8 +88,8 @@ struct [[gnu::packed]] HPETRegister
 struct [[gnu::packed]] HPETRegistersBlock
 {
     union {
-        volatile HPETCapabilityRegister capabilities;
-        volatile HPETRegister raw_capabilites;
+        HPETCapabilityRegister capabilities;
+        HPETRegister raw_capabilites;
     };
     HPETRegister configuration;
     HPETRegister interrupt_status;
@@ -124,7 +124,7 @@ bool HPET::test_and_initialize()
     klog() << "HPET @ " << hpet;
 
     auto region = MM.allocate_kernel_region(hpet.page_base(), (PAGE_SIZE * 2), "HPET Initialization", Region::Access::Read);
-    auto* sdt = (volatile ACPI::Structures::HPET*)region->vaddr().offset(hpet.offset_in_page()).as_ptr();
+    auto* sdt = (ACPI::Structures::HPET*)region->vaddr().offset(hpet.offset_in_page()).as_ptr();
 
     // Note: HPET is only usable from System Memory
     ASSERT(sdt->event_timer_block.address_space == (u8)ACPI::GenericAddressStructure::AddressSpace::SystemMemory);
@@ -145,7 +145,7 @@ bool HPET::check_for_exisiting_periodic_timers()
     if (hpet.is_null())
         return false;
     auto region = MM.allocate_kernel_region(hpet.page_base(), (PAGE_SIZE * 2), "HPET Initialization", Region::Access::Read);
-    auto* sdt = (volatile ACPI::Structures::HPET*)region->vaddr().offset(hpet.offset_in_page()).as_ptr();
+    auto* sdt = (ACPI::Structures::HPET*)region->vaddr().offset(hpet.offset_in_page()).as_ptr();
 
     ASSERT(sdt->event_timer_block.address_space == 0);
 
@@ -164,12 +164,12 @@ bool HPET::check_for_exisiting_periodic_timers()
 void HPET::global_disable()
 {
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    registers_block->configuration.reg &= ~(u32)HPETFlags::Configuration::Enable;
+    registers_block->configuration.reg = registers_block->configuration.reg & ~(u32)HPETFlags::Configuration::Enable;
 }
 void HPET::global_enable()
 {
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    registers_block->configuration.reg |= (u32)HPETFlags::Configuration::Enable;
+    registers_block->configuration.reg = registers_block->configuration.reg | (u32)HPETFlags::Configuration::Enable;
 }
 
 void HPET::set_periodic_comparator_value(const HPETComparator& comparator, u64 value)
@@ -178,8 +178,9 @@ void HPET::set_periodic_comparator_value(const HPETComparator& comparator, u64 v
     ASSERT(comparator.is_periodic());
     ASSERT(comparator.comparator_number() <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    registers_block->timers[comparator.comparator_number()].configuration_and_capability |= (u32)HPETFlags::TimerConfiguration::ValueSet;
-    registers_block->timers[comparator.comparator_number()].comparator_value = value;
+    volatile auto* timer = &registers_block->timers[comparator.comparator_number()];
+    timer->configuration_and_capability = timer->configuration_and_capability | (u32)HPETFlags::TimerConfiguration::ValueSet;
+    timer->comparator_value = value;
     enable(comparator);
 }
 
@@ -199,8 +200,10 @@ void HPET::enable_periodic_interrupt(const HPETComparator& comparator)
     disable(comparator);
     ASSERT(comparator.comparator_number() <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    ASSERT(registers_block->timers[comparator.comparator_number()].configuration_and_capability & (u32)HPETFlags::TimerConfiguration::PeriodicInterruptCapable);
-    registers_block->timers[comparator.comparator_number()].configuration_and_capability |= (u32)HPETFlags::TimerConfiguration::TimerType;
+    volatile auto* timer = &registers_block->timers[comparator.comparator_number()];
+    auto configuration_and_capability = timer->configuration_and_capability;
+    ASSERT(configuration_and_capability & (u32)HPETFlags::TimerConfiguration::PeriodicInterruptCapable);
+    timer->configuration_and_capability = configuration_and_capability | (u32)HPETFlags::TimerConfiguration::TimerType;
     enable(comparator);
 }
 void HPET::disable_periodic_interrupt(const HPETComparator& comparator)
@@ -211,8 +214,10 @@ void HPET::disable_periodic_interrupt(const HPETComparator& comparator)
     disable(comparator);
     ASSERT(comparator.comparator_number() <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    ASSERT(registers_block->timers[comparator.comparator_number()].configuration_and_capability & (u32)HPETFlags::TimerConfiguration::PeriodicInterruptCapable);
-    registers_block->timers[comparator.comparator_number()].configuration_and_capability &= ~(u32)HPETFlags::TimerConfiguration::TimerType;
+    auto volatile* timer = &registers_block->timers[comparator.comparator_number()];
+    auto configuration_and_capability = timer->configuration_and_capability;
+    ASSERT(configuration_and_capability & (u32)HPETFlags::TimerConfiguration::PeriodicInterruptCapable);
+    timer->configuration_and_capability = configuration_and_capability & ~(u32)HPETFlags::TimerConfiguration::TimerType;
     enable(comparator);
 }
 
@@ -223,7 +228,8 @@ void HPET::disable(const HPETComparator& comparator)
 #endif
     ASSERT(comparator.comparator_number() <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    registers_block->timers[comparator.comparator_number()].configuration_and_capability &= ~(u32)HPETFlags::TimerConfiguration::InterruptEnable;
+    volatile auto* timer = &registers_block->timers[comparator.comparator_number()];
+    timer->configuration_and_capability = timer->configuration_and_capability & ~(u32)HPETFlags::TimerConfiguration::InterruptEnable;
 }
 void HPET::enable(const HPETComparator& comparator)
 {
@@ -232,7 +238,8 @@ void HPET::enable(const HPETComparator& comparator)
 #endif
     ASSERT(comparator.comparator_number() <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
-    registers_block->timers[comparator.comparator_number()].configuration_and_capability |= (u32)HPETFlags::TimerConfiguration::InterruptEnable;
+    volatile auto* timer = &registers_block->timers[comparator.comparator_number()];
+    timer->configuration_and_capability = timer->configuration_and_capability | (u32)HPETFlags::TimerConfiguration::InterruptEnable;
 }
 
 u64 HPET::main_counter_value() const
@@ -280,7 +287,7 @@ void HPET::set_comparator_irq_vector(u8 comparator_number, u8 irq_vector)
     ASSERT(comparator_number <= m_comparators.size());
     auto* registers_block = (volatile HPETRegistersBlock*)m_hpet_mmio_region->vaddr().offset(m_physical_acpi_hpet_registers.offset_in_page()).as_ptr();
     auto* comparator_registers = (volatile TimerStructure*)&registers_block->timers[comparator_number];
-    comparator_registers->configuration_and_capability |= (irq_vector << 9);
+    comparator_registers->configuration_and_capability = comparator_registers->configuration_and_capability | (irq_vector << 9);
 }
 
 bool HPET::is_periodic_capable(u8 comparator_number) const
@@ -300,7 +307,7 @@ void HPET::set_comparators_to_optimal_interrupt_state(size_t)
 PhysicalAddress HPET::find_acpi_hept_registers_block()
 {
     auto region = MM.allocate_kernel_region(m_physical_acpi_hpet_table.page_base(), (PAGE_SIZE * 2), "HPET Initialization", Region::Access::Read);
-    auto* sdt = (ACPI::Structures::HPET*)region->vaddr().offset(m_physical_acpi_hpet_table.offset_in_page()).as_ptr();
+    auto* sdt = (const volatile ACPI::Structures::HPET*)region->vaddr().offset(m_physical_acpi_hpet_table.offset_in_page()).as_ptr();
     ASSERT(sdt->event_timer_block.address_space == (u8)ACPI::GenericAddressStructure::AddressSpace::SystemMemory);
     return PhysicalAddress(sdt->event_timer_block.address);
 }
@@ -315,7 +322,7 @@ HPET::HPET(PhysicalAddress acpi_hpet)
     , m_hpet_mmio_region(MM.allocate_kernel_region(m_physical_acpi_hpet_registers.page_base(), PAGE_SIZE, "HPET MMIO", Region::Access::Read | Region::Access::Write))
 {
     auto region = MM.allocate_kernel_region(m_physical_acpi_hpet_table.page_base(), (PAGE_SIZE * 2), "HPET Initialization", Region::Access::Read);
-    auto* sdt = (volatile ACPI::Structures::HPET*)region->vaddr().offset(m_physical_acpi_hpet_table.offset_in_page()).as_ptr();
+    auto* sdt = (const volatile ACPI::Structures::HPET*)region->vaddr().offset(m_physical_acpi_hpet_table.offset_in_page()).as_ptr();
     m_vendor_id = sdt->pci_vendor_id;
     m_minimum_tick = sdt->mininum_clock_tick;
     klog() << "HPET: Minimum clock tick - " << m_minimum_tick;
@@ -337,7 +344,7 @@ HPET::HPET(PhysicalAddress acpi_hpet)
     // Reset the counter, just in case...
     registers_block->main_counter_value.reg = 0;
     if (registers_block->raw_capabilites.reg & (u32)HPETFlags::Attributes::LegacyReplacementRouteCapable)
-        registers_block->configuration.reg |= (u32)HPETFlags::Configuration::LegacyReplacementRoute;
+        registers_block->configuration.reg = registers_block->configuration.reg | (u32)HPETFlags::Configuration::LegacyReplacementRoute;
 
     m_comparators.append(HPETComparator::create(0, 0, is_periodic_capable(0)));
     m_comparators.append(HPETComparator::create(1, 8, is_periodic_capable(1)));

@@ -40,8 +40,9 @@ namespace Bindings {
 DocumentWrapper::DocumentWrapper(Document& document)
     : NodeWrapper(document)
 {
-    put_native_function("getElementById", get_element_by_id, 1);
-    put_native_function("querySelectorAll", query_selector_all, 1);
+    define_native_function("getElementById", get_element_by_id, 1);
+    define_native_function("querySelector", query_selector, 1);
+    define_native_function("querySelectorAll", query_selector_all, 1);
 }
 
 DocumentWrapper::~DocumentWrapper()
@@ -60,7 +61,7 @@ const Document& DocumentWrapper::node() const
 
 static Document* document_from(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     if (StringView("DocumentWrapper") != this_object->class_name()) {
@@ -75,14 +76,32 @@ JS::Value DocumentWrapper::get_element_by_id(JS::Interpreter& interpreter)
     auto* document = document_from(interpreter);
     if (!document)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.is_empty())
-        return JS::js_null();
-    auto id = arguments[0].to_string();
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("getElementById() needs one argument");
+    auto id = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     auto* element = document->get_element_by_id(id);
     if (!element)
         return JS::js_null();
     return wrap(interpreter.heap(), const_cast<Element&>(*element));
+}
+
+JS::Value DocumentWrapper::query_selector(JS::Interpreter& interpreter)
+{
+    auto* document = document_from(interpreter);
+    if (!document)
+        return {};
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("querySelector() needs one argument");
+    auto selector = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    // FIXME: Throw if selector is invalid
+    auto element = document->query_selector(selector);
+    if (!element)
+        return JS::js_null();
+    return wrap(interpreter.heap(), *element);
 }
 
 JS::Value DocumentWrapper::query_selector_all(JS::Interpreter& interpreter)
@@ -90,15 +109,17 @@ JS::Value DocumentWrapper::query_selector_all(JS::Interpreter& interpreter)
     auto* document = document_from(interpreter);
     if (!document)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.is_empty())
-        return JS::js_null();
-    auto selector = arguments[0].to_string();
+    if (!interpreter.argument_count())
+        return interpreter.throw_exception<JS::TypeError>("querySelectorAll() needs one argument");
+    auto selector = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    // FIXME: Throw if selector is invalid
     auto elements = document->query_selector_all(selector);
     // FIXME: This should be a static NodeList, not a plain JS::Array.
     auto* node_list = JS::Array::create(interpreter.global_object());
     for (auto& element : elements) {
-        node_list->elements().append(wrap(interpreter.heap(), element));
+        node_list->indexed_properties().append(wrap(interpreter.heap(), element));
     }
     return node_list;
 }

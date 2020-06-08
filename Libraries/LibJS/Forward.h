@@ -28,13 +28,17 @@
 
 #define JS_ENUMERATE_NATIVE_OBJECTS                                              \
     __JS_ENUMERATE(Array, array, ArrayPrototype, ArrayConstructor)               \
+    __JS_ENUMERATE(BigIntObject, bigint, BigIntPrototype, BigIntConstructor)     \
     __JS_ENUMERATE(BooleanObject, boolean, BooleanPrototype, BooleanConstructor) \
     __JS_ENUMERATE(Date, date, DatePrototype, DateConstructor)                   \
     __JS_ENUMERATE(Error, error, ErrorPrototype, ErrorConstructor)               \
     __JS_ENUMERATE(Function, function, FunctionPrototype, FunctionConstructor)   \
     __JS_ENUMERATE(NumberObject, number, NumberPrototype, NumberConstructor)     \
     __JS_ENUMERATE(Object, object, ObjectPrototype, ObjectConstructor)           \
-    __JS_ENUMERATE(StringObject, string, StringPrototype, StringConstructor)
+    __JS_ENUMERATE(ProxyObject, proxy, ProxyPrototype, ProxyConstructor)         \
+    __JS_ENUMERATE(RegExpObject, regexp, RegExpPrototype, RegExpConstructor)     \
+    __JS_ENUMERATE(StringObject, string, StringPrototype, StringConstructor)     \
+    __JS_ENUMERATE(SymbolObject, symbol, SymbolPrototype, SymbolConstructor)
 
 #define JS_ENUMERATE_ERROR_SUBCLASSES                                                                   \
     __JS_ENUMERATE(EvalError, eval_error, EvalErrorPrototype, EvalErrorConstructor)                     \
@@ -52,12 +56,14 @@
 namespace JS {
 
 class ASTNode;
+class BigInt;
 class BoundFunction;
 class Cell;
 class DeferGC;
 class Error;
 class Exception;
 class Expression;
+class Accessor;
 class GlobalObject;
 class HandleImpl;
 class Heap;
@@ -70,6 +76,8 @@ class Reference;
 class ScopeNode;
 class Shape;
 class Statement;
+class Symbol;
+class Token;
 class Uint8ClampedArray;
 class Value;
 enum class DeclarationKind;

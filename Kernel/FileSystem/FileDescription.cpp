@@ -96,7 +96,7 @@ off_t FileDescription::seek(off_t offset, int whence)
 {
     LOCKER(m_lock);
     if (!m_file->is_seekable())
-        return -EINVAL;
+        return -ESPIPE;
 
     off_t new_offset;
 
@@ -158,7 +158,7 @@ bool FileDescription::can_read() const
     return m_file->can_read(*this, offset());
 }
 
-ByteBuffer FileDescription::read_entire_file()
+KResultOr<ByteBuffer> FileDescription::read_entire_file()
 {
     // HACK ALERT: (This entire function)
     ASSERT(m_file->is_inode());
@@ -179,7 +179,7 @@ ssize_t FileDescription::get_dir_entries(u8* buffer, ssize_t size)
     if (size < 0)
         return -EINVAL;
 
-    size_t size_to_allocate = max(PAGE_SIZE, metadata.size);
+    size_t size_to_allocate = max(static_cast<size_t>(PAGE_SIZE), static_cast<size_t>(metadata.size));
 
     auto temp_buffer = ByteBuffer::create_uninitialized(size_to_allocate);
     BufferStream stream(temp_buffer);
@@ -256,9 +256,11 @@ MasterPTY* FileDescription::master_pty()
     return static_cast<MasterPTY*>(m_file.ptr());
 }
 
-int FileDescription::close()
+KResult FileDescription::close()
 {
-    return 0;
+    if (m_file->ref_count() > 1)
+        return KSuccess;
+    return m_file->close();
 }
 
 String FileDescription::absolute_path() const
@@ -330,13 +332,13 @@ void FileDescription::set_file_flags(u32 flags)
 KResult FileDescription::chmod(mode_t mode)
 {
     LOCKER(m_lock);
-    return m_file->chmod(mode);
+    return m_file->chmod(*this, mode);
 }
 
 KResult FileDescription::chown(uid_t uid, gid_t gid)
 {
     LOCKER(m_lock);
-    return m_file->chown(uid, gid);
+    return m_file->chown(*this, uid, gid);
 }
 
 }

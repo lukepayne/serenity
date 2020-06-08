@@ -60,6 +60,7 @@ public:
 
     bool is_anonymous() const { return !m_node; }
     const Node* node() const { return m_node; }
+    Node* node() { return const_cast<Node*>(m_node); }
 
     Document& document();
     const Document& document() const;
@@ -81,11 +82,13 @@ public:
             callback(*node);
     }
 
-    virtual const char* class_name() const { return "LayoutNode"; }
+    virtual const char* class_name() const = 0;
+    virtual bool is_root() const { return false; }
     virtual bool is_text() const { return false; }
     virtual bool is_block() const { return false; }
     virtual bool is_replaced() const { return false; }
     virtual bool is_widget() const { return false; }
+    virtual bool is_frame() const { return false; }
     virtual bool is_image() const { return false; }
     virtual bool is_canvas() const { return false; }
     virtual bool is_box() const { return false; }
@@ -99,10 +102,20 @@ public:
 
     bool is_inline_block() const { return is_inline() && is_block(); }
 
-    virtual void layout();
+    enum class LayoutMode {
+        Default,
+        AllPossibleLineBreaks,
+        OnlyRequiredLineBreaks,
+    };
+
+    virtual void layout(LayoutMode);
     virtual void render(RenderingContext&);
 
+    bool is_absolutely_positioned() const;
+
     const LayoutBlock* containing_block() const;
+
+    bool can_contain_boxes_with_position_absolute() const;
 
     virtual LayoutNode& inline_wrapper() { return *this; }
 
@@ -111,11 +124,11 @@ public:
     LayoutNodeWithStyle* parent();
     const LayoutNodeWithStyle* parent() const;
 
-    void inserted_into(LayoutNode&) {}
-    void removed_from(LayoutNode&) {}
-    void children_changed() {}
+    void inserted_into(LayoutNode&) { }
+    void removed_from(LayoutNode&) { }
+    void children_changed() { }
 
-    virtual void split_into_lines(LayoutBlock& container);
+    virtual void split_into_lines(LayoutBlock& container, LayoutMode);
 
     bool is_visible() const { return m_visible; }
     void set_visible(bool visible) { m_visible = visible; }
@@ -145,6 +158,8 @@ public:
 
     Gfx::FloatPoint box_type_agnostic_position() const;
 
+    float font_size() const;
+
 protected:
     explicit LayoutNode(const Node*);
 
@@ -161,7 +176,7 @@ private:
 
 class LayoutNodeWithStyle : public LayoutNode {
 public:
-    virtual ~LayoutNodeWithStyle() override {}
+    virtual ~LayoutNodeWithStyle() override { }
 
     const StyleProperties& style() const { return m_style; }
     void set_style(const StyleProperties& style) { m_style = style; }

@@ -111,7 +111,7 @@ public:
 
 class WMWindowStateChangedEvent : public WMEvent {
 public:
-    WMWindowStateChangedEvent(int client_id, int window_id, const StringView& title, const Gfx::Rect& rect, bool is_active, WindowType window_type, bool is_minimized, bool is_frameless)
+    WMWindowStateChangedEvent(int client_id, int window_id, const StringView& title, const Gfx::Rect& rect, bool is_active, WindowType window_type, bool is_minimized, bool is_frameless, int progress)
         : WMEvent(Event::Type::WM_WindowStateChanged, client_id, window_id)
         , m_title(title)
         , m_rect(rect)
@@ -119,6 +119,7 @@ public:
         , m_active(is_active)
         , m_minimized(is_minimized)
         , m_frameless(is_frameless)
+        , m_progress(progress)
     {
     }
 
@@ -128,6 +129,7 @@ public:
     WindowType window_type() const { return m_window_type; }
     bool is_minimized() const { return m_minimized; }
     bool is_frameless() const { return m_frameless; }
+    int progress() const { return m_progress; }
 
 private:
     String m_title;
@@ -136,6 +138,7 @@ private:
     bool m_active;
     bool m_minimized;
     bool m_frameless;
+    int m_progress;
 };
 
 class WMWindowRectChangedEvent : public WMEvent {
@@ -264,27 +267,30 @@ enum MouseButton : u8 {
 
 class KeyEvent final : public Event {
 public:
-    KeyEvent(Type type, int key, u8 modifiers)
+    KeyEvent(Type type, KeyCode key, u8 modifiers, u32 scancode)
         : Event(type)
         , m_key(key)
         , m_modifiers(modifiers)
+        , m_scancode(scancode)
     {
     }
 
-    int key() const { return m_key; }
+    KeyCode key() const { return m_key; }
     bool ctrl() const { return m_modifiers & Mod_Ctrl; }
     bool alt() const { return m_modifiers & Mod_Alt; }
     bool shift() const { return m_modifiers & Mod_Shift; }
     bool logo() const { return m_modifiers & Mod_Logo; }
     u8 modifiers() const { return m_modifiers; }
     String text() const { return m_text; }
+    u32 scancode() const { return m_scancode; }
 
     String to_string() const;
 
 private:
     friend class WindowServerConnection;
-    int m_key { 0 };
+    KeyCode m_key { KeyCode::Key_Invalid };
     u8 m_modifiers { 0 };
+    u32 m_scancode { 0 };
     String m_text;
 };
 

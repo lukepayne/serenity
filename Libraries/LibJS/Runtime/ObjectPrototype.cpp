@@ -43,9 +43,10 @@ void ObjectPrototype::initialize()
     // This must be called after the constructor has returned, so that the below code
     // can find the ObjectPrototype through normal paths.
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("hasOwnProperty", has_own_property, 1, attr);
-    put_native_function("toString", to_string, 0, attr);
-    put_native_function("valueOf", value_of, 0, attr);
+    define_native_function("hasOwnProperty", has_own_property, 1, attr);
+    define_native_function("toString", to_string, 0, attr);
+    define_native_function("toLocaleString", to_locale_string, 0, attr);
+    define_native_function("valueOf", value_of, 0, attr);
 }
 
 ObjectPrototype::~ObjectPrototype()
@@ -54,23 +55,34 @@ ObjectPrototype::~ObjectPrototype()
 
 Value ObjectPrototype::has_own_property(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
-    return Value(this_object->has_own_property(interpreter.argument(0).to_string()));
+    auto name = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    return Value(this_object->has_own_property(name));
 }
 
 Value ObjectPrototype::to_string(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     return js_string(interpreter, String::format("[object %s]", this_object->class_name()));
 }
 
+Value ObjectPrototype::to_locale_string(Interpreter& interpreter)
+{
+    auto* this_object = interpreter.this_value().to_object(interpreter);
+    if (!this_object)
+        return {};
+    return this_object->invoke("toString");
+}
+
 Value ObjectPrototype::value_of(Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
     return this_object->value_of();

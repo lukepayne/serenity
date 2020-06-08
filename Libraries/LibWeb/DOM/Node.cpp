@@ -63,7 +63,7 @@ Node::~Node()
 const HTMLAnchorElement* Node::enclosing_link_element() const
 {
     for (auto* node = this; node; node = node->parent()) {
-        if (is<HTMLAnchorElement>(*node) && to<HTMLAnchorElement>(*node).has_attribute("href"))
+        if (is<HTMLAnchorElement>(*node) && to<HTMLAnchorElement>(*node).has_attribute(HTML::AttributeNames::href))
             return to<HTMLAnchorElement>(node);
     }
     return nullptr;
@@ -127,7 +127,7 @@ bool Node::is_link() const
     auto* enclosing_link = enclosing_link_element();
     if (!enclosing_link)
         return false;
-    return enclosing_link->has_attribute("href");
+    return enclosing_link->has_attribute(HTML::AttributeNames::href);
 }
 
 void Node::dispatch_event(NonnullRefPtr<Event> event)
@@ -153,6 +153,32 @@ void Node::dispatch_event(NonnullRefPtr<Event> event)
     // FIXME: This is a hack. We should follow the real rules of event bubbling.
     if (parent())
         parent()->dispatch_event(move(event));
+}
+
+String Node::child_text_content() const
+{
+    if (!is<ParentNode>(*this))
+        return String::empty();
+
+    StringBuilder builder;
+    to<ParentNode>(*this).for_each_child([&](auto& child) {
+        if (is<Text>(child))
+            builder.append(to<Text>(child).text_content());
+    });
+    return builder.build();
+}
+
+const Node* Node::root() const
+{
+    const Node* root = this;
+    while (root->parent())
+        root = root->parent();
+    return root;
+}
+
+bool Node::is_connected() const
+{
+    return root() && root()->is_document();
 }
 
 }

@@ -85,8 +85,6 @@ public:
     int line_height() const;
     TextPosition cursor() const { return m_cursor; }
     TextRange normalized_selection() const { return m_selection.normalized(); }
-    // FIXME: This should take glyph spacing into account, no?
-    int glyph_width() const;
 
     void insert_at_cursor_or_replace_selection(const StringView&);
     bool write_to_file(const StringView& path);
@@ -131,6 +129,8 @@ public:
     const SyntaxHighlighter* syntax_highlighter() const;
     void set_syntax_highlighter(OwnPtr<SyntaxHighlighter>);
 
+    bool is_in_drag_select() const { return m_in_drag_select; }
+
 protected:
     explicit TextEditor(Type = Type::MultiLine);
 
@@ -172,6 +172,25 @@ private:
     void paint_ruler(Painter&);
     void update_content_size();
     void did_change();
+    int fixed_glyph_width() const;
+
+    void defer_reflow();
+    void undefer_reflow();
+
+    class ReflowDeferrer {
+    public:
+        ReflowDeferrer(TextEditor& editor)
+            : m_editor(editor)
+        {
+            m_editor.defer_reflow();
+        }
+        ~ReflowDeferrer()
+        {
+            m_editor.undefer_reflow();
+        }
+    private:
+        TextEditor& m_editor;
+    };
 
     Gfx::Rect line_content_rect(size_t item_index) const;
     Gfx::Rect line_widget_rect(size_t line_index) const;
@@ -225,7 +244,7 @@ private:
     bool m_readonly { false };
     int m_line_spacing { 4 };
     size_t m_soft_tab_width { 4 };
-    int m_horizontal_content_padding { 2 };
+    int m_horizontal_content_padding { 3 };
     TextRange m_selection;
     RefPtr<Menu> m_context_menu;
     RefPtr<Action> m_undo_action;
@@ -238,6 +257,9 @@ private:
     RefPtr<Action> m_select_all_action;
     Core::ElapsedTimer m_triple_click_timer;
     NonnullRefPtrVector<Action> m_custom_context_menu_actions;
+
+    size_t m_reflow_deferred { 0 };
+    size_t m_reflow_requested { 0 };
 
     RefPtr<TextDocument> m_document;
 

@@ -51,7 +51,7 @@
 #include <LibGUI/ToolBarContainer.h>
 #include <LibGfx/Font.h>
 #include <LibMarkdown/Document.h>
-#include <LibWeb/HtmlView.h>
+#include <LibWeb/PageView.h>
 #include <LibWeb/Parser/HTMLParser.h>
 #include <string.h>
 
@@ -87,8 +87,8 @@ TextEditorWidget::TextEditorWidget()
             update_title();
     };
 
-    m_html_view = splitter.add<Web::HtmlView>();
-    m_html_view->set_visible(false);
+    m_page_view = splitter.add<Web::PageView>();
+    m_page_view->set_visible(false);
 
     m_find_replace_widget = add<GUI::Widget>();
     m_find_replace_widget->set_fill_with_background_color(true);
@@ -301,7 +301,7 @@ TextEditorWidget::TextEditorWidget()
 
         m_document_dirty = false;
         m_editor->set_text(StringView());
-        set_path(FileSystemPath());
+        set_path(LexicalPath());
         update_title();
     });
 
@@ -333,7 +333,7 @@ TextEditorWidget::TextEditorWidget()
         }
 
         m_document_dirty = false;
-        set_path(FileSystemPath(save_path.value()));
+        set_path(LexicalPath(save_path.value()));
         dbg() << "Wrote document to " << save_path.value();
     });
 
@@ -465,11 +465,11 @@ TextEditorWidget::~TextEditorWidget()
 {
 }
 
-void TextEditorWidget::set_path(const FileSystemPath& file)
+void TextEditorWidget::set_path(const LexicalPath& lexical_path)
 {
-    m_path = file.string();
-    m_name = file.title();
-    m_extension = file.extension();
+    m_path = lexical_path.string();
+    m_name = lexical_path.title();
+    m_extension = lexical_path.extension();
 
     if (m_extension == "cpp" || m_extension == "h") {
         m_cpp_highlight->activate();
@@ -499,7 +499,7 @@ void TextEditorWidget::update_title()
 void TextEditorWidget::open_sesame(const String& path)
 {
     auto file = Core::File::construct(path);
-    if (!file->open(Core::IODevice::ReadOnly)) {
+    if (!file->open(Core::IODevice::ReadOnly) && file->error() != ENOENT) {
         GUI::MessageBox::show(String::format("Opening \"%s\" failed: %s", path.characters(), strerror(errno)), "Error", GUI::MessageBox::Type::Error, GUI::MessageBox::InputType::OK, window());
         return;
     }
@@ -508,7 +508,7 @@ void TextEditorWidget::open_sesame(const String& path)
     m_document_dirty = false;
     m_document_opening = true;
 
-    set_path(FileSystemPath(path));
+    set_path(LexicalPath(path));
 
     m_editor->set_focus(true);
 }
@@ -553,17 +553,17 @@ void TextEditorWidget::set_markdown_preview_enabled(bool enabled)
         return;
     m_markdown_preview_enabled = enabled;
     m_markdown_preview_action->set_checked(enabled);
-    m_html_view->set_visible(enabled);
+    m_page_view->set_visible(enabled);
     if (enabled)
         update_markdown_preview();
 }
 
 void TextEditorWidget::update_markdown_preview()
 {
-    Markdown::Document document;
-    if (document.parse(m_editor->text())) {
-        auto html = document.render_to_html();
+    auto document = Markdown::Document::parse(m_editor->text());
+    if (document) {
+        auto html = document->render_to_html();
         auto html_document = Web::parse_html_document(html, URL::create_with_file_protocol(m_path));
-        m_html_view->set_document(html_document);
+        m_page_view->set_document(html_document);
     }
 }

@@ -24,6 +24,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <LibCore/DateTime.h>
 #include <LibCore/Timer.h>
 #include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
@@ -75,7 +76,9 @@ ByteBuffer TLSv12::read_line(size_t max_size)
 bool TLSv12::write(const ByteBuffer& buffer)
 {
     if (m_context.connection_status != ConnectionStatus::Established) {
+#ifdef TLS_DEBUG
         dbg() << "write request while not connected";
+#endif
         return false;
     }
 
@@ -108,71 +111,32 @@ bool TLSv12::common_connect(const struct sockaddr* saddr, socklen_t length)
         }
     }
 
-    auto packet = build_hello();
-    write_packet(packet);
-
     Core::Socket::on_connected = [this] {
         Core::Socket::on_ready_to_read = [this] {
-            if (!Core::Socket::is_open() || !Core::Socket::is_connected() || Core::Socket::eof()) {
-                // an abrupt closure (the server is a jerk)
-                dbg() << "Socket not open, assuming abrupt closure";
-                m_context.connection_finished = true;
-            }
-            if (m_context.critical_error) {
-                dbg() << "READ CRITICAL ERROR " << m_context.critical_error << " :(";
-                if (on_tls_error)
-                    on_tls_error((AlertDescription)m_context.critical_error);
-                return;
-            }
-            if (m_context.application_buffer.size() == 0 && m_context.connection_finished) {
-                if (on_tls_finished)
-                    on_tls_finished();
-                if (m_context.tls_buffer.size()) {
-                    dbg() << "connection closed without finishing data transfer, " << m_context.tls_buffer.size() << " bytes still in buffer";
-                } else {
-                    m_context.connection_finished = false;
-                }
-                if (!m_context.application_buffer.size())
-                    m_context.connection_status = ConnectionStatus::Disconnected;
-                return;
-            }
-            flush();
-            consume(Core::Socket::read(4096)); // FIXME: how much is proper?
-            if (is_established() && m_context.application_buffer.size())
-                if (on_tls_ready_to_read)
-                    on_tls_ready_to_read(*this);
+            read_from_socket();
         };
-        Core::Socket::on_ready_to_write = [this] {
-            if (!Core::Socket::is_open() || !Core::Socket::is_connected() || Core::Socket::eof()) {
-                // an abrupt closure (the server is a jerk)
-                dbg() << "Socket not open, assuming abrupt closure";
-                m_context.connection_finished = true;
-            }
-            if (m_context.critical_error) {
-                dbg() << "WRITE CRITICAL ERROR " << m_context.critical_error << " :(";
-                if (on_tls_error)
-                    on_tls_error((AlertDescription)m_context.critical_error);
-                return;
-            }
-            if (m_context.connection_finished) {
-                if (on_tls_finished)
-                    on_tls_finished();
-                if (m_context.tls_buffer.size()) {
-                    dbg() << "connection closed without finishing data transfer, " << m_context.tls_buffer.size() << " bytes still in buffer";
-                } else {
-                    m_context.connection_finished = false;
-                    dbg() << "FINISHED";
-                }
-                if (!m_context.application_buffer.size()) {
-                    m_context.connection_status = ConnectionStatus::Disconnected;
-                    return;
-                }
-            }
-            flush();
-            if (is_established() && !m_context.application_buffer.size()) // hey client, you still have stuff to read...
-                if (on_tls_ready_to_write)
-                    on_tls_ready_to_write(*this);
-        };
+
+        auto packet = build_hello();
+        write_packet(packet);
+
+        deferred_invoke([&](auto&) {
+            m_handshake_timeout_timer = Core::Timer::create_single_shot(
+                m_max_wait_time_for_handshake_in_seconds * 1000, [&] {
+                    // The server did not respond fast enough,
+                    // time the connection out.
+                    alert(AlertLevel::Critical, AlertDescription::UserCanceled);
+                    m_context.connection_finished = true;
+                    m_context.tls_buffer.clear();
+                    m_context.error_code = Error::TimedOut;
+                    m_context.critical_error = (u8)Error::TimedOut;
+                    check_connection_state(false); // Notify the client.
+                },
+                this);
+            write_into_socket();
+            m_handshake_timeout_timer->start();
+        });
+        m_has_scheduled_write_flush = true;
+
         if (on_tls_connected)
             on_tls_connected();
     };
@@ -180,6 +144,78 @@ bool TLSv12::common_connect(const struct sockaddr* saddr, socklen_t length)
     if (!success)
         return false;
 
+    return true;
+}
+
+void TLSv12::read_from_socket()
+{
+    if (m_context.application_buffer.size() > 0) {
+        deferred_invoke([&](auto&) { read_from_socket(); });
+        if (on_tls_ready_to_read)
+            on_tls_ready_to_read(*this);
+    }
+
+    if (!check_connection_state(true))
+        return;
+
+    consume(Core::Socket::read(4096));
+}
+
+void TLSv12::write_into_socket()
+{
+#ifdef TLS_DEBUG
+    dbg() << "Flushing cached records: " << m_context.tls_buffer.size() << " established? " << is_established();
+#endif
+    m_has_scheduled_write_flush = false;
+    if (!check_connection_state(false))
+        return;
+    flush();
+
+    if (!is_established())
+        return;
+
+    if (!m_context.application_buffer.size()) // hey client, you still have stuff to read...
+        if (on_tls_ready_to_write)
+            on_tls_ready_to_write(*this);
+}
+
+bool TLSv12::check_connection_state(bool read)
+{
+    if (!Core::Socket::is_open() || !Core::Socket::is_connected() || Core::Socket::eof()) {
+        // an abrupt closure (the server is a jerk)
+#ifdef TLS_DEBUG
+        dbg() << "Socket not open, assuming abrupt closure";
+#endif
+        m_context.connection_finished = true;
+    }
+    if (m_context.critical_error) {
+#ifdef TLS_DEBUG
+        dbg() << "CRITICAL ERROR " << m_context.critical_error << " :(";
+#endif
+        if (on_tls_error)
+            on_tls_error((AlertDescription)m_context.critical_error);
+        return false;
+    }
+    if (((read && m_context.application_buffer.size() == 0) || !read) && m_context.connection_finished) {
+        if (m_context.application_buffer.size() == 0) {
+            if (on_tls_finished)
+                on_tls_finished();
+        }
+        if (m_context.tls_buffer.size()) {
+#ifdef TLS_DEBUG
+            dbg() << "connection closed without finishing data transfer, " << m_context.tls_buffer.size() << " bytes still in buffer & " << m_context.application_buffer.size() << " bytes in application buffer";
+#endif
+        } else {
+            m_context.connection_finished = false;
+#ifdef TLS_DEBUG
+            dbg() << "FINISHED";
+#endif
+        }
+        if (!m_context.application_buffer.size()) {
+            m_context.connection_status = ConnectionStatus::Disconnected;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -202,7 +238,9 @@ bool TLSv12::flush()
     }
     if (m_context.send_retries++ == 10) {
         // drop the records, we can't send
+#ifdef TLS_DEBUG
         dbg() << "Dropping " << write_buffer().size() << " bytes worth of TLS records as max retries has been reached";
+#endif
         write_buffer().clear();
         m_context.send_retries = 0;
     }

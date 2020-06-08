@@ -29,7 +29,7 @@
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <Kernel/Devices/BlockDevice.h>
-#include <LibBareMetal/Memory/PhysicalAddress.h>
+#include <Kernel/PhysicalAddress.h>
 
 namespace Kernel {
 
@@ -40,7 +40,7 @@ public:
 
     BXVGADevice();
 
-    virtual int ioctl(FileDescription&, unsigned request, unsigned arg) override;
+    virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg) override;
     virtual KResultOr<Region*> mmap(Process&, FileDescription&, VirtualAddress preferred_vaddr, size_t offset, size_t, int prot, bool shared) override;
 
 private:

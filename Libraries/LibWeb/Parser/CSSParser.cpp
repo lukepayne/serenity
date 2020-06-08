@@ -39,11 +39,133 @@
         ASSERT_NOT_REACHED();                                             \
     }
 
+#define PARSE_ERROR()               \
+    do {                            \
+        dbg() << "CSS parse error"; \
+    } while (0)
+
 namespace Web {
+
+static CSS::ValueID value_id_for_palette_string(const StringView& string)
+{
+    if (string == "desktop-background")
+        return CSS::ValueID::VendorSpecificPaletteDesktopBackground;
+    else if (string == "active-window-border1")
+        return CSS::ValueID::VendorSpecificPaletteActiveWindowBorder1;
+    else if (string == "active-window-border2")
+        return CSS::ValueID::VendorSpecificPaletteActiveWindowBorder2;
+    else if (string == "active-window-title")
+        return CSS::ValueID::VendorSpecificPaletteActiveWindowTitle;
+    else if (string == "inactive-window-border1")
+        return CSS::ValueID::VendorSpecificPaletteInactiveWindowBorder1;
+    else if (string == "inactive-window-border2")
+        return CSS::ValueID::VendorSpecificPaletteInactiveWindowBorder2;
+    else if (string == "inactive-window-title")
+        return CSS::ValueID::VendorSpecificPaletteInactiveWindowTitle;
+    else if (string == "moving-window-border1")
+        return CSS::ValueID::VendorSpecificPaletteMovingWindowBorder1;
+    else if (string == "moving-window-border2")
+        return CSS::ValueID::VendorSpecificPaletteMovingWindowBorder2;
+    else if (string == "moving-window-title")
+        return CSS::ValueID::VendorSpecificPaletteMovingWindowTitle;
+    else if (string == "highlight-window-border1")
+        return CSS::ValueID::VendorSpecificPaletteHighlightWindowBorder1;
+    else if (string == "highlight-window-border2")
+        return CSS::ValueID::VendorSpecificPaletteHighlightWindowBorder2;
+    else if (string == "highlight-window-title")
+        return CSS::ValueID::VendorSpecificPaletteHighlightWindowTitle;
+    else if (string == "menu-stripe")
+        return CSS::ValueID::VendorSpecificPaletteMenuStripe;
+    else if (string == "menu-base")
+        return CSS::ValueID::VendorSpecificPaletteMenuBase;
+    else if (string == "menu-base-text")
+        return CSS::ValueID::VendorSpecificPaletteMenuBaseText;
+    else if (string == "menu-selection")
+        return CSS::ValueID::VendorSpecificPaletteMenuSelection;
+    else if (string == "menu-selection-text")
+        return CSS::ValueID::VendorSpecificPaletteMenuSelectionText;
+    else if (string == "window")
+        return CSS::ValueID::VendorSpecificPaletteWindow;
+    else if (string == "window-text")
+        return CSS::ValueID::VendorSpecificPaletteWindowText;
+    else if (string == "button")
+        return CSS::ValueID::VendorSpecificPaletteButton;
+    else if (string == "button-text")
+        return CSS::ValueID::VendorSpecificPaletteButtonText;
+    else if (string == "base")
+        return CSS::ValueID::VendorSpecificPaletteBase;
+    else if (string == "base-text")
+        return CSS::ValueID::VendorSpecificPaletteBaseText;
+    else if (string == "threed-highlight")
+        return CSS::ValueID::VendorSpecificPaletteThreedHighlight;
+    else if (string == "threed-shadow1")
+        return CSS::ValueID::VendorSpecificPaletteThreedShadow1;
+    else if (string == "threed-shadow2")
+        return CSS::ValueID::VendorSpecificPaletteThreedShadow2;
+    else if (string == "hover-highlight")
+        return CSS::ValueID::VendorSpecificPaletteHoverHighlight;
+    else if (string == "selection")
+        return CSS::ValueID::VendorSpecificPaletteSelection;
+    else if (string == "selection-text")
+        return CSS::ValueID::VendorSpecificPaletteSelectionText;
+    else if (string == "inactive-selection")
+        return CSS::ValueID::VendorSpecificPaletteInactiveSelection;
+    else if (string == "inactive-selection-text")
+        return CSS::ValueID::VendorSpecificPaletteInactiveSelectionText;
+    else if (string == "rubber-band-fill")
+        return CSS::ValueID::VendorSpecificPaletteRubberBandFill;
+    else if (string == "rubber-band-border")
+        return CSS::ValueID::VendorSpecificPaletteRubberBandBorder;
+    else if (string == "link")
+        return CSS::ValueID::VendorSpecificPaletteLink;
+    else if (string == "active-link")
+        return CSS::ValueID::VendorSpecificPaletteActiveLink;
+    else if (string == "visited-link")
+        return CSS::ValueID::VendorSpecificPaletteVisitedLink;
+    else if (string == "ruler")
+        return CSS::ValueID::VendorSpecificPaletteRuler;
+    else if (string == "ruler-border")
+        return CSS::ValueID::VendorSpecificPaletteRulerBorder;
+    else if (string == "ruler-active-text")
+        return CSS::ValueID::VendorSpecificPaletteRulerActiveText;
+    else if (string == "ruler-inactive-text")
+        return CSS::ValueID::VendorSpecificPaletteRulerInactiveText;
+    else if (string == "text-cursor")
+        return CSS::ValueID::VendorSpecificPaletteTextCursor;
+    else if (string == "focus-outline")
+        return CSS::ValueID::VendorSpecificPaletteFocusOutline;
+    else if (string == "syntax-comment")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxComment;
+    else if (string == "syntax-number")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxNumber;
+    else if (string == "syntax-string")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxString;
+    else if (string == "syntax-type")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxType;
+    else if (string == "syntax-punctuation")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxPunctuation;
+    else if (string == "syntax-operator")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxOperator;
+    else if (string == "syntax-keyword")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxKeyword;
+    else if (string == "syntax-control-keyword")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxControlKeyword;
+    else if (string == "syntax-identifier")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxIdentifier;
+    else if (string == "syntax-preprocessor-statement")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxPreprocessorStatement;
+    else if (string == "syntax-preprocessor-value")
+        return CSS::ValueID::VendorSpecificPaletteSyntaxPreprocessorValue;
+    else
+        return CSS::ValueID::Invalid;
+}
 
 static Optional<Color> parse_css_color(const StringView& view)
 {
-    auto color = Color::from_string(view);
+    if (view.equals_ignoring_case("transparent"))
+        return Color::from_rgba(0x00000000);
+
+    auto color = Color::from_string(view.to_string().to_lowercase());
     if (color.has_value())
         return color;
 
@@ -128,7 +250,12 @@ static Optional<float> parse_number(const StringView& view)
     if (view.ends_with('%'))
         return parse_number(view.substring_view(0, view.length() - 1));
 
-    if (view.ends_with("px"))
+    // FIXME: Maybe we should have "ends_with_ignoring_case()" ?
+    if (view.to_string().to_lowercase().ends_with("px"))
+        return parse_number(view.substring_view(0, view.length() - 2));
+    if (view.to_string().to_lowercase().ends_with("rem"))
+        return parse_number(view.substring_view(0, view.length() - 3));
+    if (view.to_string().to_lowercase().ends_with("em"))
         return parse_number(view.substring_view(0, view.length() - 2));
 
     return try_parse_float(view);
@@ -140,21 +267,30 @@ NonnullRefPtr<StyleValue> parse_css_value(const StringView& string)
     if (number.has_value()) {
         if (string.ends_with('%'))
             return PercentageStyleValue::create(number.value());
-        return LengthStyleValue::create(Length(number.value(), Length::Type::Absolute));
+        if (string.ends_with("em"))
+            return LengthStyleValue::create(Length(number.value(), Length::Type::Em));
+        if (string.ends_with("rem"))
+            return LengthStyleValue::create(Length(number.value(), Length::Type::Rem));
+        return LengthStyleValue::create(Length(number.value(), Length::Type::Px));
     }
-    if (string == "inherit")
+
+    if (string.equals_ignoring_case("inherit"))
         return InheritStyleValue::create();
-    if (string == "initial")
+    if (string.equals_ignoring_case("initial"))
         return InitialStyleValue::create();
-    if (string == "auto")
+    if (string.equals_ignoring_case("auto"))
         return LengthStyleValue::create(Length());
 
     auto color = parse_css_color(string);
     if (color.has_value())
         return ColorStyleValue::create(color.value());
 
-    if (string == "-libhtml-link")
+    if (string == "-libweb-link")
         return IdentifierStyleValue::create(CSS::ValueID::VendorSpecificLink);
+    else if (string.starts_with("-libweb-palette-")) {
+        auto value_id = value_id_for_palette_string(string.substring_view(16, string.length() - 16));
+        return IdentifierStyleValue::create(value_id);
+    }
 
     return StringStyleValue::create(string);
 }
@@ -225,7 +361,9 @@ public:
         if (peek() != ch) {
             dbg() << "peek() != '" << ch << "'";
         }
-        PARSE_ASSERT(peek() == ch);
+        if (peek() != ch) {
+            PARSE_ERROR();
+        }
         PARSE_ASSERT(index < css.length());
         ++index;
         return ch;
@@ -389,26 +527,27 @@ public:
             auto pseudo_name = String::copy(buffer);
             buffer.clear();
 
-
             // Ignore for now, otherwise we produce a "false positive" selector
             // and apply styles to the element itself, not its pseudo element
             if (is_pseudo_element)
                 return {};
 
-            if (pseudo_name == "link")
+            if (pseudo_name.equals_ignoring_case("link"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::Link;
-            else if (pseudo_name == "hover")
+            else if (pseudo_name.equals_ignoring_case("hover"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::Hover;
-            else if (pseudo_name == "focus")
+            else if (pseudo_name.equals_ignoring_case("focus"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::Focus;
-            else if (pseudo_name == "first-child")
+            else if (pseudo_name.equals_ignoring_case("first-child"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::FirstChild;
-            else if (pseudo_name == "last-child")
+            else if (pseudo_name.equals_ignoring_case("last-child"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::LastChild;
-            else if (pseudo_name == "only-child")
+            else if (pseudo_name.equals_ignoring_case("only-child"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::OnlyChild;
-            else if (pseudo_name == "empty")
+            else if (pseudo_name.equals_ignoring_case("empty"))
                 simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::Empty;
+            else if (pseudo_name.equals_ignoring_case("root"))
+                simple_selector.pseudo_class = Selector::SimpleSelector::PseudoClass::Root;
         }
 
         if (index == index_at_start) {
@@ -465,11 +604,15 @@ public:
         Vector<Selector::ComplexSelector> complex_selectors;
 
         for (;;) {
+            auto index_before = index;
             auto complex_selector = parse_complex_selector();
             if (complex_selector.has_value())
                 complex_selectors.append(complex_selector.value());
             consume_whitespace_or_comments();
             if (!peek() || peek() == ',' || peek() == '{')
+                break;
+            // HACK: If we didn't move forward, just let go.
+            if (index == index_before)
                 break;
         }
 
@@ -491,6 +634,7 @@ public:
     void parse_selector_list()
     {
         for (;;) {
+            auto index_before = index;
             parse_selector();
             consume_whitespace_or_comments();
             if (peek() == ',') {
@@ -498,6 +642,9 @@ public:
                 continue;
             }
             if (peek() == '{')
+                break;
+            // HACK: If we didn't move forward, just let go.
+            if (index_before == index)
                 break;
         }
     }

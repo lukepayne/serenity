@@ -94,7 +94,12 @@ public:
     const HTMLAnchorElement* enclosing_link_element() const;
     const HTMLElement* enclosing_html_element() const;
 
+    String child_text_content() const;
+
     virtual bool is_html_element() const { return false; }
+
+    const Node* root() const;
+    bool is_connected() const;
 
     template<typename T>
     const T* first_child_of_type() const;
@@ -122,6 +127,9 @@ public:
     void invalidate_style();
 
     bool is_link() const;
+
+    virtual void document_did_attach_to_frame(Frame&) {}
+    virtual void document_will_detach_from_frame(Frame&) {}
 
 protected:
     Node(Document&, NodeType);

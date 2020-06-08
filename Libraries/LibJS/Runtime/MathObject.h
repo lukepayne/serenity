@@ -51,6 +51,10 @@ private:
     static Value cos(Interpreter&);
     static Value tan(Interpreter&);
     static Value pow(Interpreter&);
+    static Value exp(Interpreter&);
+    static Value expm1(Interpreter&);
+    static Value sign(Interpreter&);
+    static Value clz32(Interpreter&);
 };
 
 }

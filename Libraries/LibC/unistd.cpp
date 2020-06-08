@@ -135,7 +135,9 @@ int execvpe(const char* filename, char* const argv[], char* const envp[])
 int execvp(const char* filename, char* const argv[])
 {
     int rc = execvpe(filename, argv, environ);
-    dbg() << "execvp() about to return " << rc << " with errno=" << errno;
+    int saved_errno = errno;
+    dbg() << "execvp() about to return " << rc << " with errno=" << saved_errno;
+    errno = saved_errno;
     return rc;
 }
 
@@ -411,14 +413,7 @@ int rmdir(const char* pathname)
 
 int isatty(int fd)
 {
-    struct termios dummy;
-    return tcgetattr(fd, &dummy) == 0;
-}
-
-int getdtablesize()
-{
-    int rc = syscall(SC_getdtablesize);
-    __RETURN_WITH_ERRNO(rc, rc, -1);
+    return fcntl(fd, F_ISTTY);
 }
 
 int dup(int old_fd)

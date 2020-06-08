@@ -144,7 +144,7 @@ void StyleProperties::load_font() const
 
     // FIXME: Do this properly, with quote handling etc.
     for (auto& font_name : font_family.split(',')) {
-        font_name = font_name.trim_spaces();
+        font_name = font_name.trim_whitespace();
         if (font_name == "monospace")
             font_name = "Csilla";
 
@@ -172,11 +172,11 @@ void StyleProperties::load_font() const
     return;
 }
 
-float StyleProperties::line_height() const
+float StyleProperties::line_height(const LayoutNode& layout_node) const
 {
     auto line_height_length = length_or_fallback(CSS::PropertyID::LineHeight, {});
     if (line_height_length.is_absolute())
-        return (float)font().glyph_height() * line_height_length.to_px();
+        return (float)line_height_length.to_px(layout_node);
     return (float)font().glyph_height() * 1.4f;
 }
 

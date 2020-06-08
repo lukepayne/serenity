@@ -38,19 +38,21 @@ namespace JS {
 ObjectConstructor::ObjectConstructor()
     : NativeFunction("Object", *interpreter().global_object().function_prototype())
 {
-    put("prototype", interpreter().global_object().object_prototype(), 0);
-    put("length", Value(1), Attribute::Configurable);
+    define_property("prototype", interpreter().global_object().object_prototype(), 0);
+    define_property("length", Value(1), Attribute::Configurable);
 
     u8 attr = Attribute::Writable | Attribute::Configurable;
-    put_native_function("defineProperty", define_property, 3, attr);
-    put_native_function("is", is, 2, attr);
-    put_native_function("getOwnPropertyDescriptor", get_own_property_descriptor, 2, attr);
-    put_native_function("getOwnPropertyNames", get_own_property_names, 1, attr);
-    put_native_function("getPrototypeOf", get_prototype_of, 1, attr);
-    put_native_function("setPrototypeOf", set_prototype_of, 2, attr);
-    put_native_function("keys", keys, 1, attr);
-    put_native_function("values", values, 1, attr);
-    put_native_function("entries", entries, 1, attr);
+    define_native_function("defineProperty", define_property_, 3, attr);
+    define_native_function("is", is, 2, attr);
+    define_native_function("getOwnPropertyDescriptor", get_own_property_descriptor, 2, attr);
+    define_native_function("getOwnPropertyNames", get_own_property_names, 1, attr);
+    define_native_function("getPrototypeOf", get_prototype_of, 1, attr);
+    define_native_function("setPrototypeOf", set_prototype_of, 2, attr);
+    define_native_function("isExtensible", is_extensible, 1, attr);
+    define_native_function("preventExtensions", prevent_extensions, 1, attr);
+    define_native_function("keys", keys, 1, attr);
+    define_native_function("values", values, 1, attr);
+    define_native_function("entries", entries, 1, attr);
 }
 
 ObjectConstructor::~ObjectConstructor()
@@ -71,18 +73,15 @@ Value ObjectConstructor::get_own_property_names(Interpreter& interpreter)
 {
     if (!interpreter.argument_count())
         return {};
-    auto* object = interpreter.argument(0).to_object(interpreter.heap());
+    auto* object = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
     auto* result = Array::create(interpreter.global_object());
-    for (size_t i = 0; i < object->elements().size(); ++i) {
-        if (!object->elements()[i].is_empty())
-            result->elements().append(js_string(interpreter, String::number(i)));
-    }
+    for (auto& entry : object->indexed_properties())
+        result->indexed_properties().append(js_string(interpreter, String::number(entry.index())));
+    for (auto& it : object->shape().property_table_ordered())
+        result->indexed_properties().append(js_string(interpreter, it.key));
 
-    for (auto& it : object->shape().property_table_ordered()) {
-        result->elements().append(js_string(interpreter, it.key));
-    }
     return result;
 }
 
@@ -90,7 +89,7 @@ Value ObjectConstructor::get_prototype_of(Interpreter& interpreter)
 {
     if (!interpreter.argument_count())
         return {};
-    auto* object = interpreter.argument(0).to_object(interpreter.heap());
+    auto* object = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
     return object->prototype();
@@ -99,33 +98,81 @@ Value ObjectConstructor::get_prototype_of(Interpreter& interpreter)
 Value ObjectConstructor::set_prototype_of(Interpreter& interpreter)
 {
     if (interpreter.argument_count() < 2)
-        return {};
-    auto* object = interpreter.argument(0).to_object(interpreter.heap());
+        return interpreter.throw_exception<TypeError>("Object.setPrototypeOf requires at least two arguments");
+    auto* object = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
-    object->set_prototype(&const_cast<Object&>(interpreter.argument(1).as_object()));
-    return {};
+    auto prototype_value = interpreter.argument(1);
+    Object* prototype;
+    if (prototype_value.is_null()) {
+        prototype = nullptr;
+    } else if (prototype_value.is_object()) {
+        prototype = &prototype_value.as_object();
+    } else {
+        interpreter.throw_exception<TypeError>("Prototype must be null or object");
+        return {};
+    }
+    if (!object->set_prototype(prototype)) {
+        if (!interpreter.exception())
+            interpreter.throw_exception<TypeError>("Object's setPrototypeOf method returned false");
+        return {};
+    }
+    return object;
+}
+
+Value ObjectConstructor::is_extensible(Interpreter& interpreter)
+{
+    auto argument = interpreter.argument(0);
+    if (!argument.is_object())
+        return Value(false);
+    return Value(argument.as_object().is_extensible());
+}
+
+Value ObjectConstructor::prevent_extensions(Interpreter& interpreter)
+{
+    auto argument = interpreter.argument(0);
+    if (!argument.is_object())
+        return argument;
+    if (!argument.as_object().prevent_extensions()) {
+        if (!interpreter.exception())
+            interpreter.throw_exception<TypeError>("Proxy preventExtensions handler returned false");
+        return {};
+    }
+    return argument;
 }
 
 Value ObjectConstructor::get_own_property_descriptor(Interpreter& interpreter)
 {
-    auto* object = interpreter.argument(0).to_object(interpreter.heap());
+    auto* object = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
-    auto property_key = interpreter.argument(1).to_string();
-    return object->get_own_property_descriptor(property_key);
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    return object->get_own_property_descriptor_object(property_key);
 }
 
-Value ObjectConstructor::define_property(Interpreter& interpreter)
+Value ObjectConstructor::define_property_(Interpreter& interpreter)
 {
     if (!interpreter.argument(0).is_object())
         return interpreter.throw_exception<TypeError>("Object argument is not an object");
     if (!interpreter.argument(2).is_object())
         return interpreter.throw_exception<TypeError>("Descriptor argument is not an object");
     auto& object = interpreter.argument(0).as_object();
-    auto property_key = interpreter.argument(1).to_string();
+    auto property_key = interpreter.argument(1).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
     auto& descriptor = interpreter.argument(2).as_object();
-    object.define_property(property_key, descriptor);
+    if (!object.define_property(property_key, descriptor)) {
+        if (!interpreter.exception()) {
+            if (object.is_proxy_object()) {
+                interpreter.throw_exception<TypeError>("Proxy handler's defineProperty method returned false");
+            } else {
+                interpreter.throw_exception<TypeError>("Unable to define property on non-extensible object");
+            }
+        }
+        return {};
+    }
     return &object;
 }
 
@@ -139,11 +186,11 @@ Value ObjectConstructor::keys(Interpreter& interpreter)
     if (!interpreter.argument_count())
         return interpreter.throw_exception<TypeError>("Can't convert undefined to object");
 
-    auto* obj_arg = interpreter.argument(0).to_object(interpreter.heap());
+    auto* obj_arg = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
 
-    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::Key, Attribute::Enumerable);
+    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::Key, true);
 }
 
 Value ObjectConstructor::values(Interpreter& interpreter)
@@ -151,11 +198,11 @@ Value ObjectConstructor::values(Interpreter& interpreter)
     if (!interpreter.argument_count())
         return interpreter.throw_exception<TypeError>("Can't convert undefined to object");
 
-    auto* obj_arg = interpreter.argument(0).to_object(interpreter.heap());
+    auto* obj_arg = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
 
-    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::Value, Attribute::Enumerable);
+    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::Value, true);
 }
 
 Value ObjectConstructor::entries(Interpreter& interpreter)
@@ -163,11 +210,11 @@ Value ObjectConstructor::entries(Interpreter& interpreter)
     if (!interpreter.argument_count())
         return interpreter.throw_exception<TypeError>("Can't convert undefined to object");
 
-    auto* obj_arg = interpreter.argument(0).to_object(interpreter.heap());
+    auto* obj_arg = interpreter.argument(0).to_object(interpreter);
     if (interpreter.exception())
         return {};
 
-    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::KeyAndValue, Attribute::Enumerable);
+    return obj_arg->get_own_properties(*obj_arg, GetOwnPropertyMode::KeyAndValue, true);
 }
 
 }

@@ -35,7 +35,9 @@
 #include <LibJS/Runtime/NativeFunction.h>
 #include <LibJS/Runtime/Object.h>
 #include <LibJS/Runtime/Reference.h>
+#include <LibJS/Runtime/ScriptFunction.h>
 #include <LibJS/Runtime/Shape.h>
+#include <LibJS/Runtime/SymbolObject.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
@@ -71,8 +73,11 @@ Value Interpreter::run(const Statement& statement, ArgumentVector arguments, Sco
     m_last_value = js_undefined();
     for (auto& node : block.children()) {
         m_last_value = node.execute(*this);
-        if (m_unwind_until != ScopeType::None)
+        if (should_unwind()) {
+            if (should_unwind_until(ScopeType::Breakable, block.label()))
+                stop_unwind();
             break;
+        }
     }
 
     bool did_return = m_unwind_until == ScopeType::Function;
@@ -87,6 +92,11 @@ Value Interpreter::run(const Statement& statement, ArgumentVector arguments, Sco
 
 void Interpreter::enter_scope(const ScopeNode& scope_node, ArgumentVector arguments, ScopeType scope_type)
 {
+    for (auto& declaration : scope_node.functions()) {
+        auto* function = ScriptFunction::create(global_object(), declaration.name(), declaration.body(), declaration.parameters(), declaration.function_length(), current_environment());
+        set_variable(declaration.name(), function);
+    }
+
     if (scope_type == ScopeType::Function) {
         m_scope_stack.append({ scope_type, scope_node, false });
         return;
@@ -195,15 +205,18 @@ void Interpreter::gather_roots(Badge<Heap>, HashTable<Cell*>& roots)
         }
         roots.set(call_frame.environment);
     }
+
+    SymbolObject::gather_symbol_roots(roots);
 }
 
 Value Interpreter::call(Function& function, Value this_value, Optional<MarkedValueList> arguments)
 {
     auto& call_frame = push_call_frame();
     call_frame.function_name = function.name();
-    call_frame.this_value = this_value;
+    call_frame.this_value = function.bound_this().value_or(this_value);
+    call_frame.arguments = function.bound_arguments();
     if (arguments.has_value())
-        call_frame.arguments = arguments.value().values();
+        call_frame.arguments.append(arguments.value().values());
     call_frame.environment = function.create_environment();
     auto result = function.call(*this);
     pop_call_frame();
@@ -236,6 +249,7 @@ Value Interpreter::construct(Function& function, Function& new_target, Optional<
 
 Value Interpreter::throw_exception(Exception* exception)
 {
+#ifdef __serenity__
     if (exception->value().is_object() && exception->value().as_object().is_error()) {
         auto& error = static_cast<Error&>(exception->value().as_object());
         dbg() << "Throwing JavaScript Error: " << error.name() << ", " << error.message();
@@ -247,6 +261,7 @@ Value Interpreter::throw_exception(Exception* exception)
             dbg() << "  " << function_name;
         }
     }
+#endif
     m_exception = exception;
     unwind(ScopeType::Try);
     return {};
@@ -266,20 +281,11 @@ String Interpreter::join_arguments() const
 {
     StringBuilder joined_arguments;
     for (size_t i = 0; i < argument_count(); ++i) {
-        joined_arguments.append(argument(i).to_string().characters());
+        joined_arguments.append(argument(i).to_string_without_side_effects().characters());
         if (i != argument_count() - 1)
             joined_arguments.append(' ');
     }
     return joined_arguments.build();
-}
-
-Vector<String> Interpreter::get_trace() const
-{
-    Vector<String> trace;
-    // -2 to skip the console.trace() call frame
-    for (ssize_t i = m_call_stack.size() - 2; i >= 0; --i)
-        trace.append(m_call_stack[i].function_name);
-    return trace;
 }
 
 }

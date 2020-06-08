@@ -30,7 +30,10 @@
 #include <LibJS/Interpreter.h>
 #include <LibJS/Runtime/Function.h>
 #include <LibJS/Runtime/MarkedValueList.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Window.h>
+#include <LibWeb/Frame/Frame.h>
+#include <LibWeb/PageView.h>
 
 namespace Web {
 
@@ -65,7 +68,8 @@ void Window::set_interval(JS::Function& callback, i32 interval)
     (void)Core::Timer::construct(interval, [handle = make_handle(&callback)] {
         auto& function = const_cast<JS::Function&>(static_cast<const JS::Function&>(*handle.cell()));
         auto& interpreter = function.interpreter();
-        interpreter.call(function);
+        auto& window = static_cast<Bindings::WindowObject&>(interpreter.global_object());
+        interpreter.call(function, &window);
     }).leak_ref();
 }
 
@@ -75,7 +79,8 @@ void Window::set_timeout(JS::Function& callback, i32 interval)
     auto& timer = Core::Timer::construct(interval, [handle = make_handle(&callback)] {
         auto& function = const_cast<JS::Function&>(static_cast<const JS::Function&>(*handle.cell()));
         auto& interpreter = function.interpreter();
-        interpreter.call(function);
+        auto& window = static_cast<Bindings::WindowObject&>(interpreter.global_object());
+        interpreter.call(function, &window);
     }).leak_ref();
     timer.set_single_shot(true);
 }
@@ -103,6 +108,28 @@ void Window::cancel_animation_frame(i32 id)
 {
     // FIXME: We should not be passing untrusted numbers to DisplayLink::unregister_callback()!
     GUI::DisplayLink::unregister_callback(id);
+}
+
+void Window::did_set_location_href(Badge<Bindings::LocationObject>, const String& new_href)
+{
+    auto* frame = document().frame();
+    if (!frame)
+        return;
+    auto* view = frame->page_view();
+    if (!view)
+        return;
+    view->load(new_href);
+}
+
+void Window::did_call_location_reload(Badge<Bindings::LocationObject>)
+{
+    auto* frame = document().frame();
+    if (!frame)
+        return;
+    auto* view = frame->page_view();
+    if (!view)
+        return;
+    view->reload();
 }
 
 }

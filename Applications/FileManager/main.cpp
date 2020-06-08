@@ -27,7 +27,7 @@
 #include "DirectoryView.h"
 #include "FileUtils.h"
 #include "PropertiesDialog.h"
-#include <AK/FileSystemPath.h>
+#include <AK/LexicalPath.h>
 #include <AK/StringBuilder.h>
 #include <AK/URL.h>
 #include <LibCore/ConfigFile.h>
@@ -67,7 +67,7 @@ static int run_in_windowed_mode(RefPtr<Core::ConfigFile>, String initial_locatio
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio thread shared_buffer accept unix cpath rpath wpath fattr proc exec", nullptr) < 0) {
+    if (pledge("stdio thread shared_buffer accept unix cpath rpath wpath fattr proc exec sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -118,7 +118,6 @@ int main(int argc, char** argv)
 class DesktopWidget final : public GUI::Widget {
     C_OBJECT(DesktopWidget);
 
-public:
 private:
     virtual void paint_event(GUI::PaintEvent& event) override
     {
@@ -166,7 +165,7 @@ int run_in_desktop_mode(RefPtr<Core::ConfigFile> config, String initial_location
     auto mkdir_action = GUI::Action::create("New directory...", {}, Gfx::Bitmap::load_from_file("/res/icons/16x16/mkdir.png"), [&](const GUI::Action&) {
         auto input_box = GUI::InputBox::construct("Enter name:", "New directory", window);
         if (input_box->exec() == GUI::InputBox::ExecOK && !input_box->text_value().is_empty()) {
-            auto new_dir_path = canonicalized_path(
+            auto new_dir_path = LexicalPath::canonicalized_path(
                 String::format("%s/%s",
                     model->root_path().characters(),
                     input_box->text_value().characters()));
@@ -180,7 +179,7 @@ int run_in_desktop_mode(RefPtr<Core::ConfigFile> config, String initial_location
     auto touch_action = GUI::Action::create("New file...", {}, Gfx::Bitmap::load_from_file("/res/icons/16x16/new.png"), [&](const GUI::Action&) {
         auto input_box = GUI::InputBox::construct("Enter name:", "New file", window);
         if (input_box->exec() == GUI::InputBox::ExecOK && !input_box->text_value().is_empty()) {
-            auto new_file_path = canonicalized_path(
+            auto new_file_path = LexicalPath::canonicalized_path(
                 String::format("%s/%s",
                     model->root_path().characters(),
                     input_box->text_value().characters()));
@@ -254,6 +253,8 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
     location_label.size_to_fit();
 
     auto& location_textbox = location_toolbar.add<GUI::TextBox>();
+    location_textbox.set_size_policy(GUI::SizePolicy::Fill, GUI::SizePolicy::Fixed);
+    location_textbox.set_preferred_size(0, 22);
 
     auto& splitter = widget.add<GUI::HorizontalSplitter>();
     auto& tree_view = splitter.add<GUI::TreeView>();
@@ -322,7 +323,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
     auto mkdir_action = GUI::Action::create("New directory...", { Mod_Ctrl | Mod_Shift, Key_N }, Gfx::Bitmap::load_from_file("/res/icons/16x16/mkdir.png"), [&](const GUI::Action&) {
         auto input_box = GUI::InputBox::construct("Enter name:", "New directory", window);
         if (input_box->exec() == GUI::InputBox::ExecOK && !input_box->text_value().is_empty()) {
-            auto new_dir_path = canonicalized_path(
+            auto new_dir_path = LexicalPath::canonicalized_path(
                 String::format("%s/%s",
                     directory_view.path().characters(),
                     input_box->text_value().characters()));
@@ -420,9 +421,10 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
 
             StringBuilder copy_text;
             for (auto& path : paths) {
-                copy_text.appendf("%s\n", path.characters());
+                auto url = URL::create_with_file_protocol(path);
+                copy_text.appendf("%s\n", url.to_string().characters());
             }
-            GUI::Clipboard::the().set_data(copy_text.build(), "file-list");
+            GUI::Clipboard::the().set_data(copy_text.build(), "text/uri-list");
         },
         window);
     copy_action->set_enabled(false);
@@ -440,7 +442,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
                     selected = selected_file_paths();
                 } else {
                     path = directories_model->full_path(tree_view.selection().first());
-                    container_dir_path = FileSystemPath(path).basename();
+                    container_dir_path = LexicalPath(path).basename();
                     selected = tree_view_selected_file_paths();
                 }
 
@@ -462,7 +464,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
 
     auto do_paste = [&](const GUI::Action& action) {
         auto data_and_type = GUI::Clipboard::the().data_and_type();
-        if (data_and_type.type != "file-list") {
+        if (data_and_type.type != "text/uri-list") {
             dbg() << "Cannot paste clipboard type " << data_and_type.type;
             return;
         }
@@ -478,16 +480,18 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
         else
             target_directory = directory_view.path();
 
-        for (auto& current_path : copied_lines) {
-            if (current_path.is_empty())
+        for (auto& uri_as_string : copied_lines) {
+            if (uri_as_string.is_empty())
                 continue;
+            URL url = uri_as_string;
+            if (!url.is_valid() || url.protocol() != "file") {
+                dbg() << "Cannot paste URI " << uri_as_string;
+                continue;
+            }
 
-            auto new_path = String::format("%s/%s",
-                target_directory.characters(),
-                FileSystemPath(current_path).basename().characters());
-            if (!FileUtils::copy_file_or_directory(current_path, new_path)) {
-                auto error_message = String::format("Could not paste %s.",
-                    current_path.characters());
+            auto new_path = String::format("%s/%s", target_directory.characters(), url.basename().characters());
+            if (!FileUtils::copy_file_or_directory(url.path(), new_path)) {
+                auto error_message = String::format("Could not paste %s.", url.path().characters());
                 GUI::MessageBox::show(error_message, "File Manager", GUI::MessageBox::Type::Error);
             } else {
                 refresh_tree_view();
@@ -506,7 +510,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
 
         String message;
         if (paths.size() == 1) {
-            message = String::format("Really delete %s?", FileSystemPath(paths[0]).basename().characters());
+            message = String::format("Really delete %s?", LexicalPath(paths[0]).basename().characters());
         } else {
             message = String::format("Really delete %d files?", paths.size());
         }
@@ -607,9 +611,9 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
         },
         window);
 
-    GUI::Clipboard::the().on_content_change = [&](const String& data_type) {
+    GUI::Clipboard::the().on_change = [&](const String& data_type) {
         auto current_location = directory_view.path();
-        paste_action->set_enabled(data_type == "file-list" && access(current_location.characters(), W_OK) == 0);
+        paste_action->set_enabled(data_type == "text/uri-list" && access(current_location.characters(), W_OK) == 0);
     };
 
     auto menubar = GUI::MenuBar::construct();
@@ -678,7 +682,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
 
         auto can_write_in_path = access(new_path.characters(), W_OK) == 0;
         mkdir_action->set_enabled(can_write_in_path);
-        paste_action->set_enabled(can_write_in_path && GUI::Clipboard::the().type() == "file-list");
+        paste_action->set_enabled(can_write_in_path && GUI::Clipboard::the().type() == "text/uri-list");
         go_forward_action->set_enabled(directory_view.path_history_position() < directory_view.path_history_size() - 1);
         go_back_action->set_enabled(directory_view.path_history_position() > 0);
         open_parent_directory_action->set_enabled(new_path != "/");
@@ -758,7 +762,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
             auto& node = directory_view.model().node(index);
 
             if (node.is_directory()) {
-                auto should_get_enabled = access(node.full_path(directory_view.model()).characters(), W_OK) == 0 && GUI::Clipboard::the().type() == "file-list";
+                auto should_get_enabled = access(node.full_path(directory_view.model()).characters(), W_OK) == 0 && GUI::Clipboard::the().type() == "text/uri-list";
                 folder_specific_paste_action->set_enabled(should_get_enabled);
                 directory_context_menu->popup(event.screen_position());
             } else {
@@ -787,7 +791,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
                 continue;
             auto new_path = String::format("%s/%s",
                 target_node.full_path(directory_view.model()).characters(),
-                FileSystemPath(url_to_copy.path()).basename().characters());
+                LexicalPath(url_to_copy.path()).basename().characters());
 
             if (url_to_copy.path() == new_path)
                 continue;
@@ -823,7 +827,7 @@ int run_in_windowed_mode(RefPtr<Core::ConfigFile> config, String initial_locatio
     directory_view.open(initial_location);
     directory_view.set_focus(true);
 
-    paste_action->set_enabled(GUI::Clipboard::the().type() == "file-list" && access(initial_location.characters(), W_OK) == 0);
+    paste_action->set_enabled(GUI::Clipboard::the().type() == "text/uri-list" && access(initial_location.characters(), W_OK) == 0);
 
     window->show();
 

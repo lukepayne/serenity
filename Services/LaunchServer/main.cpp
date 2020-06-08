@@ -29,7 +29,6 @@
 #include <LibCore/ConfigFile.h>
 #include <LibCore/EventLoop.h>
 #include <LibCore/LocalServer.h>
-#include <LibGUI/WindowServerConnection.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -43,6 +42,7 @@ int main(int argc, char** argv)
 
     auto launcher = LaunchServer::Launcher();
 
+    launcher.load_handlers("/res/apps");
     launcher.load_config(Core::ConfigFile::get_for_app("LaunchServer"));
 
     if (pledge("stdio accept rpath proc exec", nullptr) < 0) {

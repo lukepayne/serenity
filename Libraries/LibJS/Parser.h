@@ -26,9 +26,11 @@
 
 #pragma once
 
-#include "AST.h"
-#include "Lexer.h"
 #include <AK/NonnullRefPtr.h>
+#include <AK/StringBuilder.h>
+#include <LibJS/AST.h>
+#include <LibJS/Lexer.h>
+#include <stdio.h>
 
 namespace JS {
 
@@ -44,13 +46,14 @@ public:
     NonnullRefPtr<Program> parse_program();
 
     template<typename FunctionNodeType>
-    NonnullRefPtr<FunctionNodeType> parse_function_node(bool need_function_keyword = true);
+    NonnullRefPtr<FunctionNodeType> parse_function_node(bool check_for_function_and_name = true);
 
     NonnullRefPtr<Statement> parse_statement();
     NonnullRefPtr<BlockStatement> parse_block_statement();
     NonnullRefPtr<ReturnStatement> parse_return_statement();
-    NonnullRefPtr<VariableDeclaration> parse_variable_declaration();
-    NonnullRefPtr<ForStatement> parse_for_statement();
+    NonnullRefPtr<VariableDeclaration> parse_variable_declaration(bool with_semicolon = true);
+    NonnullRefPtr<Statement> parse_for_statement();
+    NonnullRefPtr<Statement> parse_for_in_of_statement(NonnullRefPtr<ASTNode> lhs);
     NonnullRefPtr<IfStatement> parse_if_statement();
     NonnullRefPtr<ThrowStatement> parse_throw_statement();
     NonnullRefPtr<TryStatement> parse_try_statement();
@@ -64,18 +67,53 @@ public:
     NonnullRefPtr<DebuggerStatement> parse_debugger_statement();
     NonnullRefPtr<ConditionalExpression> parse_conditional_expression(NonnullRefPtr<Expression> test);
 
-    NonnullRefPtr<Expression> parse_expression(int min_precedence, Associativity associate = Associativity::Right);
+    NonnullRefPtr<Expression> parse_expression(int min_precedence, Associativity associate = Associativity::Right, Vector<TokenType> forbidden = {});
     NonnullRefPtr<Expression> parse_primary_expression();
     NonnullRefPtr<Expression> parse_unary_prefixed_expression();
+    NonnullRefPtr<RegExpLiteral> parse_regexp_literal();
     NonnullRefPtr<ObjectExpression> parse_object_expression();
     NonnullRefPtr<ArrayExpression> parse_array_expression();
+    NonnullRefPtr<StringLiteral> parse_string_literal(Token token);
     NonnullRefPtr<TemplateLiteral> parse_template_literal(bool is_tagged);
     NonnullRefPtr<Expression> parse_secondary_expression(NonnullRefPtr<Expression>, int min_precedence, Associativity associate = Associativity::Right);
     NonnullRefPtr<CallExpression> parse_call_expression(NonnullRefPtr<Expression>);
     NonnullRefPtr<NewExpression> parse_new_expression();
     RefPtr<FunctionExpression> try_parse_arrow_function_expression(bool expect_parens);
+    RefPtr<Statement> try_parse_labelled_statement();
 
-    bool has_errors() const { return m_parser_state.m_lexer.has_errors() || m_parser_state.m_has_errors; }
+    struct Error {
+        String message;
+        size_t line;
+        size_t column;
+
+        String to_string() const
+        {
+            if (line == 0 || column == 0)
+                return message;
+            return String::format("%s (line: %zu, column: %zu)", message.characters(), line, column);
+        }
+
+        String source_location_hint(const StringView& source, const char spacer = ' ', const char indicator = '^') const
+        {
+            if (line == 0 || column == 0)
+                return {};
+            StringBuilder builder;
+            builder.append(source.split_view('\n', true)[line - 1]);
+            builder.append('\n');
+            for (size_t i = 0; i < column - 1; ++i)
+                builder.append(spacer);
+            builder.append(indicator);
+            return builder.build();
+        }
+    };
+
+    bool has_errors() const { return m_parser_state.m_errors.size(); }
+    const Vector<Error>& errors() const { return m_parser_state.m_errors; }
+    void print_errors() const
+    {
+        for (auto& error : m_parser_state.m_errors)
+            fprintf(stderr, "SyntaxError: %s\n", error.to_string().characters());
+    }
 
 private:
     friend class ScopePusher;
@@ -84,7 +122,7 @@ private:
     Associativity operator_associativity(TokenType) const;
     bool match_expression() const;
     bool match_unary_prefixed_expression() const;
-    bool match_secondary_expression() const;
+    bool match_secondary_expression(Vector<TokenType> forbidden = {}) const;
     bool match_statement() const;
     bool match_variable_declaration() const;
     bool match_identifier_name() const;
@@ -98,12 +136,21 @@ private:
     void save_state();
     void load_state();
 
+    enum class UseStrictDirectiveState {
+        None,
+        Looking,
+        Found,
+    };
+
     struct ParserState {
         Lexer m_lexer;
         Token m_current_token;
-        bool m_has_errors = false;
+        Vector<Error> m_errors;
         Vector<NonnullRefPtrVector<VariableDeclaration>> m_var_scopes;
         Vector<NonnullRefPtrVector<VariableDeclaration>> m_let_scopes;
+        Vector<NonnullRefPtrVector<FunctionDeclaration>> m_function_scopes;
+        UseStrictDirectiveState m_use_strict_directive { UseStrictDirectiveState::None };
+        bool m_strict_mode { false };
 
         explicit ParserState(Lexer);
     };

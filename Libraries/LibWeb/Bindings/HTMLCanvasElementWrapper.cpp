@@ -40,10 +40,10 @@ namespace Bindings {
 HTMLCanvasElementWrapper::HTMLCanvasElementWrapper(HTMLCanvasElement& element)
     : ElementWrapper(element)
 {
-    put_native_function("getContext", get_context, 1);
+    define_native_function("getContext", get_context, 1);
 
-    put_native_property("width", width_getter, nullptr);
-    put_native_property("height", height_getter, nullptr);
+    define_native_property("width", width_getter, nullptr);
+    define_native_property("height", height_getter, nullptr);
 }
 
 HTMLCanvasElementWrapper::~HTMLCanvasElementWrapper()
@@ -62,7 +62,7 @@ const HTMLCanvasElement& HTMLCanvasElementWrapper::node() const
 
 static HTMLCanvasElement* impl_from(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return nullptr;
     // FIXME: Verify that it's a HTMLCanvasElementWrapper somehow!
@@ -74,12 +74,13 @@ JS::Value HTMLCanvasElementWrapper::get_context(JS::Interpreter& interpreter)
     auto* impl = impl_from(interpreter);
     if (!impl)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() >= 1) {
-        auto* context = impl->get_context(arguments[0].to_string());
-        return wrap(interpreter.heap(), *context);
-    }
-    return JS::js_undefined();
+    auto context_type = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    if (context_type != "2d")
+        return JS::js_null();
+    auto* context = impl->get_context(context_type);
+    return wrap(interpreter.heap(), *context);
 }
 
 JS::Value HTMLCanvasElementWrapper::width_getter(JS::Interpreter& interpreter)

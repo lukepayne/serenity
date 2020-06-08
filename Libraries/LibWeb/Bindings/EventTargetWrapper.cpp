@@ -27,6 +27,7 @@
 #include <AK/FlyString.h>
 #include <AK/Function.h>
 #include <LibJS/Interpreter.h>
+#include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/Function.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibWeb/Bindings/EventListenerWrapper.h>
@@ -41,7 +42,7 @@ EventTargetWrapper::EventTargetWrapper(EventTarget& impl)
     : Wrapper(*interpreter().global_object().object_prototype())
     , m_impl(impl)
 {
-    put_native_function("addEventListener", add_event_listener, 2);
+    define_native_function("addEventListener", add_event_listener, 2);
 }
 
 EventTargetWrapper::~EventTargetWrapper()
@@ -50,16 +51,18 @@ EventTargetWrapper::~EventTargetWrapper()
 
 JS::Value EventTargetWrapper::add_event_listener(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return {};
-    auto& arguments = interpreter.call_frame().arguments;
-    if (arguments.size() < 2)
-        return JS::js_undefined();
-    auto event_name = arguments[0].to_string();
-    ASSERT(arguments[1].is_object());
-    ASSERT(arguments[1].as_object().is_function());
-    auto& function = static_cast<JS::Function&>(const_cast<Object&>(arguments[1].as_object()));
+    if (interpreter.argument_count() < 2)
+        return interpreter.throw_exception<JS::TypeError>("addEventListener() needs two arguments");
+    auto event_name = interpreter.argument(0).to_string(interpreter);
+    if (interpreter.exception())
+        return {};
+    auto callback = interpreter.argument(1);
+    ASSERT(callback.is_object());
+    ASSERT(callback.as_object().is_function());
+    auto& function = callback.as_function();
     auto listener = adopt(*new EventListener(JS::make_handle(&function)));
     static_cast<EventTargetWrapper*>(this_object)->impl().add_event_listener(event_name, move(listener));
     return JS::js_undefined();

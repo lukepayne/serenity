@@ -30,7 +30,7 @@
 #include <Kernel/Process.h>
 #include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
-#include <LibBareMetal/IO.h>
+#include <Kernel/IO.h>
 #include <LibC/errno_numbers.h>
 #include <LibC/sys/ioctl_numbers.h>
 
@@ -192,7 +192,7 @@ KResultOr<Region*> BXVGADevice::mmap(Process& process, FileDescription&, Virtual
     return region;
 }
 
-int BXVGADevice::ioctl(FileDescription&, unsigned request, unsigned arg)
+int BXVGADevice::ioctl(FileDescription&, unsigned request, FlatPtr arg)
 {
     REQUIRE_PROMISE(video);
     switch (request) {

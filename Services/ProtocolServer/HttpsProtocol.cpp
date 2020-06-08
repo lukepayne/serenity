@@ -29,6 +29,8 @@
 #include <ProtocolServer/HttpsDownload.h>
 #include <ProtocolServer/HttpsProtocol.h>
 
+namespace ProtocolServer {
+
 HttpsProtocol::HttpsProtocol()
     : Protocol("https")
 {
@@ -38,13 +40,16 @@ HttpsProtocol::~HttpsProtocol()
 {
 }
 
-RefPtr<Download> HttpsProtocol::start_download(PSClientConnection& client, const URL& url)
+OwnPtr<Download> HttpsProtocol::start_download(ClientConnection& client, const URL& url, const HashMap<String, String>& headers)
 {
     HTTP::HttpRequest request;
     request.set_method(HTTP::HttpRequest::Method::GET);
     request.set_url(url);
+    request.set_headers(headers);
     auto job = HTTP::HttpsJob::construct(request);
     auto download = HttpsDownload::create_with_job({}, client, (HTTP::HttpsJob&)*job);
     job->start();
     return download;
+}
+
 }

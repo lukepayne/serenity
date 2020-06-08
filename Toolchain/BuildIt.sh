@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+shopt -s globstar
 # This file will need to be run in bash, for now.
 
 
@@ -12,7 +13,8 @@ echo "$DIR"
 ARCH=${ARCH:-"i686"}
 TARGET="$ARCH-pc-serenity"
 PREFIX="$DIR/Local"
-SYSROOT="$DIR/../Root"
+BUILD=$(realpath "$DIR/../Build")
+SYSROOT="$BUILD/Root"
 
 MAKE="make"
 MD5SUM="md5sum"
@@ -56,8 +58,8 @@ BINUTILS_NAME="binutils-$BINUTILS_VERSION"
 BINUTILS_PKG="${BINUTILS_NAME}.tar.gz"
 BINUTILS_BASE_URL="http://ftp.gnu.org/gnu/binutils"
 
-GCC_VERSION="9.3.0"
-GCC_MD5SUM="9b7e8f6cfad96114e726c752935af58a"
+GCC_VERSION="10.1.0"
+GCC_MD5SUM="8a9fbd7e24d04c5d36e96bc894d3cd6b"
 GCC_NAME="gcc-$GCC_VERSION"
 GCC_PKG="${GCC_NAME}.tar.gz"
 GCC_BASE_URL="http://ftp.gnu.org/gnu/gcc"
@@ -150,7 +152,6 @@ pushd "$DIR/Tarballs"
     if [ ! -d $GCC_NAME ]; then
         echo "Extracting gcc..."
         tar -xzf $GCC_PKG
-
         pushd $GCC_NAME
             if [ "$git_patch" = "1" ]; then
                 git init > /dev/null
@@ -158,7 +159,7 @@ pushd "$DIR/Tarballs"
                 git commit -am "BASE" > /dev/null
                 git apply "$DIR"/Patches/gcc.patch > /dev/null
             else
-                patch -p1 < "$DIR"/Patches/gcc.patch > /dev/null
+                patch -p1 < "$DIR/Patches/gcc.patch" > /dev/null
             fi
         popd
     else
@@ -225,8 +226,18 @@ pushd "$DIR/Build/"
         "$MAKE" install-gcc install-target-libgcc || exit 1
 
         echo "XXX serenity libc and libm"
-        ( cd "$DIR/../Libraries/LibC/" && "$MAKE" clean && "$MAKE" EXTRA_LIBC_DEFINES="-DBUILDING_SERENITY_TOOLCHAIN" && "$MAKE" install )
-        ( cd "$DIR/../Libraries/LibM/" && "$MAKE" clean && "$MAKE" && "$MAKE" install )
+        mkdir -p "$BUILD"
+        pushd "$BUILD"
+            CXXFLAGS="-DBUILDING_SERENITY_TOOLCHAIN" cmake ..
+            cmake --build . --target LibC
+            install -D Libraries/LibC/libc.a Libraries/LibM/libm.a Root/usr/lib/
+            SRC_ROOT=$(realpath "$DIR"/..)
+            for header in "$SRC_ROOT"/Libraries/Lib{C,M}/**/*.h; do
+                target=$(echo "$header" | sed -e "s@$SRC_ROOT/Libraries/LibC@@" -e "s@$SRC_ROOT/Libraries/LibM@@")
+                install -D "$header" "Root/usr/include/$target"
+            done
+            unset SRC_ROOT
+        popd
 
         echo "XXX build libstdc++"
         "$MAKE" all-target-libstdc++-v3 || exit 1
@@ -236,6 +247,7 @@ pushd "$DIR/Build/"
         if [ "$(uname -s)" = "OpenBSD" ]; then
             cd "$DIR/Local/libexec/gcc/i686-pc-serenity/$GCC_VERSION" && ln -sf liblto_plugin.so.0.0 liblto_plugin.so
         fi
+
     popd
 popd
 

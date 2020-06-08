@@ -26,6 +26,7 @@
 
 #pragma once
 
+#include <AK/Checked.h>
 #include <AK/FixedArray.h>
 #include <AK/HashMap.h>
 #include <AK/InlineLinkedList.h>
@@ -39,7 +40,7 @@
 #include <Kernel/Thread.h>
 #include <Kernel/UnixTypes.h>
 #include <Kernel/VM/RangeAllocator.h>
-#include <LibBareMetal/StdLib.h>
+#include <Kernel/StdLib.h>
 #include <LibC/signal_numbers.h>
 
 namespace ELF {
@@ -72,6 +73,7 @@ extern VirtualAddress g_return_to_ring3_from_signal_trampoline;
     __ENUMERATE_PLEDGE_PROMISE(video)   \
     __ENUMERATE_PLEDGE_PROMISE(accept)  \
     __ENUMERATE_PLEDGE_PROMISE(settime) \
+    __ENUMERATE_PLEDGE_PROMISE(sigaction) \
     __ENUMERATE_PLEDGE_PROMISE(shared_buffer)
 
 enum class Pledge : u32 {
@@ -134,8 +136,6 @@ public:
     const PageDirectory& page_directory() const { return *m_page_directory; }
 
     static Process* from_pid(pid_t);
-
-    static void update_info_page_timestamp(const timeval&);
 
     const String& name() const { return m_name; }
     pid_t pid() const { return m_pid; }
@@ -231,7 +231,6 @@ public:
     int sys$ptsname_r(int fd, char*, ssize_t);
     pid_t sys$fork(RegisterState&);
     int sys$execve(const Syscall::SC_execve_params*);
-    int sys$getdtablesize();
     int sys$dup(int oldfd);
     int sys$dup2(int oldfd, int newfd);
     int sys$sigaction(int signum, const sigaction* act, sigaction* old_act);
@@ -246,7 +245,7 @@ public:
     unsigned sys$alarm(unsigned seconds);
     int sys$access(const char* pathname, size_t path_length, int mode);
     int sys$fcntl(int fd, int cmd, u32 extra_arg);
-    int sys$ioctl(int fd, unsigned request, unsigned arg);
+    int sys$ioctl(int fd, unsigned request, FlatPtr arg);
     int sys$mkdir(const char* pathname, size_t path_length, mode_t mode);
     clock_t sys$times(tms*);
     int sys$utime(const char* pathname, size_t path_length, const struct utimbuf*);
@@ -299,7 +298,6 @@ public:
     int sys$module_unload(const char* name, size_t name_length);
     int sys$profiling_enable(pid_t);
     int sys$profiling_disable(pid_t);
-    void* sys$get_kernel_info_page();
     int sys$futex(const Syscall::SC_futex_params*);
     int sys$set_thread_boost(int tid, int amount);
     int sys$set_process_boost(pid_t, int amount);
@@ -335,8 +333,17 @@ public:
 
     [[nodiscard]] bool validate_read(const void*, size_t) const;
     [[nodiscard]] bool validate_write(void*, size_t) const;
+
     template<typename T>
-    [[nodiscard]] bool validate_read_typed(T* value, size_t count = 1) { return validate_read(value, sizeof(T) * count); }
+    [[nodiscard]] bool validate_read_typed(T* value, size_t count = 1)
+    {
+        Checked size = sizeof(T);
+        size *= count;
+        if (size.has_overflow())
+            return false;
+        return validate_read(value, size.value());
+    }
+
     template<typename T>
     [[nodiscard]] bool validate_read_and_copy_typed(T* dest, const T* src)
     {
@@ -346,8 +353,17 @@ public:
         }
         return validated;
     }
+
     template<typename T>
-    [[nodiscard]] bool validate_write_typed(T* value, size_t count = 1) { return validate_write(value, sizeof(T) * count); }
+    [[nodiscard]] bool validate_write_typed(T* value, size_t count = 1)
+    {
+        Checked size = sizeof(T);
+        size *= count;
+        if (size.has_overflow())
+            return false;
+        return validate_write(value, size.value());
+    }
+
     template<typename DataType, typename SizeType>
     [[nodiscard]] bool validate(const Syscall::MutableBufferArgument<DataType, SizeType>&);
     template<typename DataType, typename SizeType>
@@ -386,11 +402,9 @@ public:
     bool is_being_inspected() const { return m_inspector_count; }
 
     void terminate_due_to_signal(u8 signal);
-    void send_signal(u8, Process* sender);
+    KResult send_signal(u8 signal, Process* sender);
 
     u16 thread_count() const { return m_thread_count; }
-
-    Thread& any_thread();
 
     Lock& big_lock() { return m_big_lock; }
 

@@ -57,6 +57,12 @@
 static void run_command(int ptm_fd, String command)
 {
     pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        dbg() << "run_command: could not fork to run '" << command << "'";
+        return;
+    }
+
     if (pid == 0) {
         const char* tty_name = ptsname(ptm_fd);
         if (!tty_name) {
@@ -173,7 +179,7 @@ RefPtr<GUI::Window> create_settings_window(TerminalWidget& terminal)
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio tty rpath accept cpath wpath shared_buffer proc exec unix fattr", nullptr) < 0) {
+    if (pledge("stdio tty rpath accept cpath wpath shared_buffer proc exec unix fattr sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
     }

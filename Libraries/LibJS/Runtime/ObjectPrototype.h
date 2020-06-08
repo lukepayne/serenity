@@ -37,12 +37,15 @@ public:
 
     virtual ~ObjectPrototype() override;
 
+    // public to serve as intrinsic function %Object.prototype.toString%
+    static Value to_string(Interpreter&);
+
 private:
     virtual const char* class_name() const override { return "ObjectPrototype"; }
 
     static Value has_own_property(Interpreter&);
+    static Value to_locale_string(Interpreter&);
     static Value value_of(Interpreter&);
-    static Value to_string(Interpreter&);
 };
 
 }

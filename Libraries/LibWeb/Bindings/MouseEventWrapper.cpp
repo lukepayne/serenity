@@ -37,8 +37,8 @@ namespace Bindings {
 MouseEventWrapper::MouseEventWrapper(MouseEvent& event)
     : EventWrapper(event)
 {
-    put_native_property("offsetX", offset_x_getter, nullptr);
-    put_native_property("offsetY", offset_y_getter, nullptr);
+    define_native_property("offsetX", offset_x_getter, nullptr);
+    define_native_property("offsetY", offset_y_getter, nullptr);
 }
 
 MouseEventWrapper::~MouseEventWrapper()
@@ -57,7 +57,7 @@ MouseEvent& MouseEventWrapper::event()
 
 static MouseEvent* impl_from(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object)
         return nullptr;
     // FIXME: Verify that it's a CanvasRenderingContext2DWrapper somehow!

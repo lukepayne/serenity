@@ -84,7 +84,7 @@ WindowManager::~WindowManager()
 
 NonnullRefPtr<Cursor> WindowManager::get_cursor(const String& name, const Gfx::Point& hotspot)
 {
-    auto path = m_wm_config->read_entry("Cursor", name, "/res/cursors/arrow.png");
+    auto path = m_config->read_entry("Cursor", name, "/res/cursors/arrow.png");
     auto gb = Gfx::Bitmap::load_from_file(path);
     if (gb)
         return Cursor::create(*gb, hotspot);
@@ -93,7 +93,7 @@ NonnullRefPtr<Cursor> WindowManager::get_cursor(const String& name, const Gfx::P
 
 NonnullRefPtr<Cursor> WindowManager::get_cursor(const String& name)
 {
-    auto path = m_wm_config->read_entry("Cursor", name, "/res/cursors/arrow.png");
+    auto path = m_config->read_entry("Cursor", name, "/res/cursors/arrow.png");
     auto gb = Gfx::Bitmap::load_from_file(path);
 
     if (gb)
@@ -103,12 +103,12 @@ NonnullRefPtr<Cursor> WindowManager::get_cursor(const String& name)
 
 void WindowManager::reload_config(bool set_screen)
 {
-    m_wm_config = Core::ConfigFile::open("/etc/WindowServer/WindowServer.ini");
+    m_config = Core::ConfigFile::open("/etc/WindowServer/WindowServer.ini");
 
-    m_double_click_speed = m_wm_config->read_num_entry("Input", "DoubleClickSpeed", 250);
+    m_double_click_speed = m_config->read_num_entry("Input", "DoubleClickSpeed", 250);
 
     if (set_screen) {
-        set_resolution(m_wm_config->read_num_entry("Screen", "Width", 1920), m_wm_config->read_num_entry("Screen", "Height", 1080));
+        set_resolution(m_config->read_num_entry("Screen", "Width", 1920), m_config->read_num_entry("Screen", "Height", 1080));
     }
 
     m_arrow_cursor = get_cursor("Arrow", { 2, 2 });
@@ -148,17 +148,17 @@ bool WindowManager::set_resolution(int width, int height)
             return IterationDecision::Continue;
         });
     }
-    if (m_wm_config) {
+    if (m_config) {
         if (success) {
-            dbg() << "Saving resolution: " << Gfx::Size(width, height) << " to config file at " << m_wm_config->file_name();
-            m_wm_config->write_num_entry("Screen", "Width", width);
-            m_wm_config->write_num_entry("Screen", "Height", height);
-            m_wm_config->sync();
+            dbg() << "Saving resolution: " << Gfx::Size(width, height) << " to config file at " << m_config->file_name();
+            m_config->write_num_entry("Screen", "Width", width);
+            m_config->write_num_entry("Screen", "Height", height);
+            m_config->sync();
         } else {
-            dbg() << "Saving fallback resolution: " << resolution() << " to config file at " << m_wm_config->file_name();
-            m_wm_config->write_num_entry("Screen", "Width", resolution().width());
-            m_wm_config->write_num_entry("Screen", "Height", resolution().height());
-            m_wm_config->sync();
+            dbg() << "Saving fallback resolution: " << resolution() << " to config file at " << m_config->file_name();
+            m_config->write_num_entry("Screen", "Width", resolution().width());
+            m_config->write_num_entry("Screen", "Height", resolution().height());
+            m_config->sync();
         }
     }
     return success;
@@ -186,7 +186,7 @@ void WindowManager::add_window(Window& window)
     if (m_switcher.is_visible() && window.type() != WindowType::WindowSwitcher)
         m_switcher.refresh();
 
-    recompute_occlusions();
+    Compositor::the().recompute_occlusions();
 
     if (window.listens_to_wm_events()) {
         for_each_window([&](Window& other_window) {
@@ -207,11 +207,11 @@ void WindowManager::move_to_front_and_make_active(Window& window)
         return;
 
     if (m_windows_in_order.tail() != &window)
-        invalidate(window);
+        window.invalidate();
     m_windows_in_order.remove(&window);
     m_windows_in_order.append(&window);
 
-    recompute_occlusions();
+    Compositor::the().recompute_occlusions();
 
     set_active_window(&window);
 
@@ -229,14 +229,14 @@ void WindowManager::move_to_front_and_make_active(Window& window)
 
 void WindowManager::remove_window(Window& window)
 {
-    invalidate(window);
+    window.invalidate();
     m_windows_in_order.remove(&window);
     if (window.is_active())
         pick_new_active_window();
     if (m_switcher.is_visible() && window.type() != WindowType::WindowSwitcher)
         m_switcher.refresh();
 
-    recompute_occlusions();
+    Compositor::the().recompute_occlusions();
 
     for_each_window_listening_to_wm_events([&window](Window& listener) {
         if (!(listener.wm_event_mask() & WMEventMask::WindowRemovals))
@@ -253,7 +253,7 @@ void WindowManager::tell_wm_listener_about_window(Window& listener, Window& wind
         return;
     if (window.is_internal())
         return;
-    listener.client()->post_message(Messages::WindowClient::WM_WindowStateChanged(listener.window_id(), window.client_id(), window.window_id(), window.is_active(), window.is_minimized(), window.is_frameless(), (i32)window.type(), window.title(), window.rect()));
+    listener.client()->post_message(Messages::WindowClient::WM_WindowStateChanged(listener.window_id(), window.client_id(), window.window_id(), window.is_active(), window.is_minimized(), window.is_frameless(), (i32)window.type(), window.title(), window.rect(), window.progress()));
 }
 
 void WindowManager::tell_wm_listener_about_window_rect(Window& listener, Window& window)
@@ -330,31 +330,16 @@ void WindowManager::notify_rect_changed(Window& window, const Gfx::Rect& old_rec
     if (m_switcher.is_visible() && window.type() != WindowType::WindowSwitcher)
         m_switcher.refresh();
 
-    recompute_occlusions();
+    Compositor::the().recompute_occlusions();
 
     tell_wm_listeners_window_rect_changed(window);
 
     MenuManager::the().refresh();
 }
 
-void WindowManager::recompute_occlusions()
-{
-    for_each_visible_window_from_back_to_front([&](Window& window) {
-        if (m_switcher.is_visible()) {
-            window.set_occluded(false);
-        } else {
-            if (any_opaque_window_above_this_one_contains_rect(window, window.frame().rect()))
-                window.set_occluded(true);
-            else
-                window.set_occluded(false);
-        }
-        return IterationDecision::Continue;
-    });
-}
-
 void WindowManager::notify_opacity_changed(Window&)
 {
-    recompute_occlusions();
+    Compositor::the().recompute_occlusions();
 }
 
 void WindowManager::notify_minimization_state_changed(Window& window)
@@ -372,6 +357,11 @@ void WindowManager::notify_occlusion_state_changed(Window& window)
 {
     if (window.client())
         window.client()->post_message(Messages::WindowClient::WindowStateChanged(window.window_id(), window.is_minimized(), window.is_occluded()));
+}
+
+void WindowManager::notify_progress_changed(Window& window)
+{
+    tell_wm_listeners_window_state_changed(window);
 }
 
 void WindowManager::pick_new_active_window()
@@ -395,7 +385,7 @@ void WindowManager::start_window_move(Window& window, const MouseEvent& event)
     m_move_window = window.make_weak_ptr();
     m_move_origin = event.position();
     m_move_window_origin = window.position();
-    invalidate(window);
+    window.invalidate();
 }
 
 void WindowManager::start_window_resize(Window& window, const Gfx::Point& position, MouseButton button)
@@ -426,7 +416,7 @@ void WindowManager::start_window_resize(Window& window, const Gfx::Point& positi
     m_resize_origin = position;
     m_resize_window_original_rect = window.rect();
 
-    invalidate(window);
+    window.invalidate();
 }
 
 void WindowManager::start_window_resize(Window& window, const MouseEvent& event)
@@ -443,7 +433,7 @@ bool WindowManager::process_ongoing_window_move(MouseEvent& event, Window*& hove
         dbg() << "[WM] Finish moving Window{" << m_move_window << "}";
 #endif
 
-        invalidate(*m_move_window);
+        m_move_window->invalidate();
         if (m_move_window->rect().contains(event.position()))
             hovered_window = m_move_window;
         if (m_move_window->is_resizable()) {
@@ -520,7 +510,7 @@ bool WindowManager::process_ongoing_window_resize(const MouseEvent& event, Windo
         dbg() << "[WM] Finish resizing Window{" << m_resize_window << "}";
 #endif
         Core::EventLoop::current().post_event(*m_resize_window, make<ResizeEvent>(m_resize_window->rect(), m_resize_window->rect()));
-        invalidate(*m_resize_window);
+        m_resize_window->invalidate();
         if (m_resize_window->rect().contains(event.position()))
             hovered_window = m_resize_window;
         m_resize_window = nullptr;
@@ -776,10 +766,8 @@ void WindowManager::process_mouse_event(MouseEvent& event, Window*& hovered_wind
     HashTable<Window*> windows_who_received_mouse_event_due_to_cursor_tracking;
 
     for (auto* window = m_windows_in_order.tail(); window; window = window->prev()) {
-        if (!window->global_cursor_tracking())
+        if (!window->global_cursor_tracking() || !window->is_visible() || window->is_minimized())
             continue;
-        ASSERT(window->is_visible());    // Maybe this should be supported? Idk. Let's catch it and think about it later.
-        ASSERT(!window->is_minimized()); // Maybe this should also be supported? Idk.
         windows_who_received_mouse_event_due_to_cursor_tracking.set(window);
         auto translated_event = event.translated(-window->position());
         deliver_mouse_event(*window, translated_event);
@@ -818,11 +806,7 @@ void WindowManager::process_mouse_event(MouseEvent& event, Window*& hovered_wind
             return IterationDecision::Continue;
         });
     } else {
-        for_each_visible_window_from_front_to_back([&](Window& window) {
-            auto window_frame_rect = window.frame().rect();
-            if (!window_frame_rect.contains(event.position()))
-                return IterationDecision::Continue;
-
+        auto process_mouse_event_for_window = [&](Window& window) {
             if (&window != m_resize_candidate.ptr())
                 clear_resize_candidate();
 
@@ -832,14 +816,12 @@ void WindowManager::process_mouse_event(MouseEvent& event, Window*& hovered_wind
                 if (!window.is_fullscreen() && m_keyboard_modifiers == Mod_Logo && event.type() == Event::MouseDown && event.button() == MouseButton::Left) {
                     hovered_window = &window;
                     start_window_move(window, event);
-                    m_moved_or_resized_since_logo_keydown = true;
-                    return IterationDecision::Break;
+                    return;
                 }
                 if (window.is_resizable() && m_keyboard_modifiers == Mod_Logo && event.type() == Event::MouseDown && event.button() == MouseButton::Right && !window.is_blocked_by_modal_window()) {
                     hovered_window = &window;
                     start_window_resize(window, event);
-                    m_moved_or_resized_since_logo_keydown = true;
-                    return IterationDecision::Break;
+                    return;
                 }
             }
 
@@ -852,7 +834,7 @@ void WindowManager::process_mouse_event(MouseEvent& event, Window*& hovered_wind
                     new_opacity = 1.0f;
                 window.set_opacity(new_opacity);
                 window.invalidate();
-                return IterationDecision::Break;
+                return;
             }
 
             // Well okay, let's see if we're hitting the frame or the window inside the frame.
@@ -872,14 +854,25 @@ void WindowManager::process_mouse_event(MouseEvent& event, Window*& hovered_wind
                         m_active_input_window = window.make_weak_ptr();
                     }
                 }
-                return IterationDecision::Break;
+                return;
             }
 
             // We are hitting the frame, pass the event along to WindowFrame.
-            window.frame().on_mouse_event(event.translated(-window_frame_rect.location()));
+            window.frame().on_mouse_event(event.translated(-window.frame().rect().location()));
             event_window_with_frame = &window;
-            return IterationDecision::Break;
-        });
+        };
+
+        if (auto* fullscreen_window = active_fullscreen_window()) {
+            process_mouse_event_for_window(*fullscreen_window);
+        } else {
+            for_each_visible_window_from_front_to_back([&](Window& window) {
+                auto window_frame_rect = window.frame().rect();
+                if (!window_frame_rect.contains(event.position()))
+                    return IterationDecision::Continue;
+                process_mouse_event_for_window(window);
+                return IterationDecision::Break;
+            });
+        }
 
         // Clicked outside of any window
         if (!hovered_window && !event_window_with_frame && event.type() == Event::MouseDown)
@@ -896,56 +889,6 @@ void WindowManager::clear_resize_candidate()
         Compositor::the().invalidate_cursor();
     m_resize_candidate = nullptr;
 }
-
-bool WindowManager::any_opaque_window_contains_rect(const Gfx::Rect& rect)
-{
-    bool found_containing_window = false;
-    for_each_visible_window_from_back_to_front([&](Window& window) {
-        if (window.is_minimized())
-            return IterationDecision::Continue;
-        if (window.opacity() < 1.0f)
-            return IterationDecision::Continue;
-        if (window.has_alpha_channel()) {
-            // FIXME: Just because the window has an alpha channel doesn't mean it's not opaque.
-            //        Maybe there's some way we could know this?
-            return IterationDecision::Continue;
-        }
-        if (window.frame().rect().contains(rect)) {
-            found_containing_window = true;
-            return IterationDecision::Break;
-        }
-        return IterationDecision::Continue;
-    });
-    return found_containing_window;
-};
-
-bool WindowManager::any_opaque_window_above_this_one_contains_rect(const Window& a_window, const Gfx::Rect& rect)
-{
-    bool found_containing_window = false;
-    bool checking = false;
-    for_each_visible_window_from_back_to_front([&](Window& window) {
-        if (&window == &a_window) {
-            checking = true;
-            return IterationDecision::Continue;
-        }
-        if (!checking)
-            return IterationDecision::Continue;
-        if (!window.is_visible())
-            return IterationDecision::Continue;
-        if (window.is_minimized())
-            return IterationDecision::Continue;
-        if (window.opacity() < 1.0f)
-            return IterationDecision::Continue;
-        if (window.has_alpha_channel())
-            return IterationDecision::Continue;
-        if (window.frame().rect().contains(rect)) {
-            found_containing_window = true;
-            return IterationDecision::Break;
-        }
-        return IterationDecision::Continue;
-    });
-    return found_containing_window;
-};
 
 Gfx::Rect WindowManager::menubar_rect() const
 {
@@ -985,18 +928,6 @@ void WindowManager::event(Core::Event& event)
             return;
         }
 
-        if (key_event.key() == Key_Logo) {
-            if (key_event.type() == Event::KeyUp) {
-                if (!m_moved_or_resized_since_logo_keydown && !m_switcher.is_visible() && !m_move_window && !m_resize_window) {
-                    MenuManager::the().toggle_system_menu();
-                    return;
-                }
-
-            } else if (key_event.type() == Event::KeyDown) {
-                m_moved_or_resized_since_logo_keydown = false;
-            }
-        }
-
         if (MenuManager::the().current_menu()) {
             MenuManager::the().dispatch_event(event);
             return;
@@ -1012,7 +943,6 @@ void WindowManager::event(Core::Event& event)
         if (m_active_window) {
             if (key_event.type() == Event::KeyDown && key_event.modifiers() == Mod_Logo) {
                 if (key_event.key() == Key_Down) {
-                    m_moved_or_resized_since_logo_keydown = true;
                     if (m_active_window->is_resizable() && m_active_window->is_maximized()) {
                         m_active_window->set_maximized(false);
                         return;
@@ -1023,12 +953,10 @@ void WindowManager::event(Core::Event& event)
                 }
                 if (m_active_window->is_resizable()) {
                     if (key_event.key() == Key_Up) {
-                        m_moved_or_resized_since_logo_keydown = true;
                         m_active_window->set_maximized(!m_active_window->is_maximized());
                         return;
                     }
                     if (key_event.key() == Key_Left) {
-                        m_moved_or_resized_since_logo_keydown = true;
                         if (m_active_window->tiled() != WindowTileType::None) {
                             m_active_window->set_tiled(WindowTileType::None);
                             return;
@@ -1039,7 +967,6 @@ void WindowManager::event(Core::Event& event)
                         return;
                     }
                     if (key_event.key() == Key_Right) {
-                        m_moved_or_resized_since_logo_keydown = true;
                         if (m_active_window->tiled() != WindowTileType::None) {
                             m_active_window->set_tiled(WindowTileType::None);
                             return;
@@ -1064,10 +991,10 @@ void WindowManager::set_highlight_window(Window* window)
     if (window == m_highlight_window)
         return;
     if (auto* previous_highlight_window = m_highlight_window.ptr())
-        invalidate(*previous_highlight_window);
+        previous_highlight_window->invalidate();
     m_highlight_window = window ? window->make_weak_ptr() : nullptr;
     if (m_highlight_window)
-        invalidate(*m_highlight_window);
+        m_highlight_window->invalidate();
 }
 
 static bool window_type_can_become_active(WindowType type)
@@ -1094,7 +1021,7 @@ void WindowManager::set_active_window(Window* window)
     if (previously_active_window) {
         previously_active_client = previously_active_window->client();
         Core::EventLoop::current().post_event(*previously_active_window, make<Event>(Event::WindowDeactivated));
-        invalidate(*previously_active_window);
+        previously_active_window->invalidate();
         m_active_window = nullptr;
         m_active_input_window = nullptr;
         tell_wm_listeners_window_state_changed(*previously_active_window);
@@ -1104,7 +1031,7 @@ void WindowManager::set_active_window(Window* window)
         m_active_window = window->make_weak_ptr();
         active_client = m_active_window->client();
         Core::EventLoop::current().post_event(*m_active_window, make<Event>(Event::WindowActivated));
-        invalidate(*m_active_window);
+        m_active_window->invalidate();
 
         auto* client = window->client();
         ASSERT(client);
@@ -1144,30 +1071,6 @@ void WindowManager::invalidate()
 void WindowManager::invalidate(const Gfx::Rect& rect)
 {
     Compositor::the().invalidate(rect);
-}
-
-void WindowManager::invalidate(const Window& window)
-{
-    invalidate(window.frame().rect());
-}
-
-void WindowManager::invalidate(const Window& window, const Gfx::Rect& rect)
-{
-    if (window.type() == WindowType::MenuApplet) {
-        AppletManager::the().invalidate_applet(window, rect);
-        return;
-    }
-
-    if (rect.is_empty()) {
-        invalidate(window);
-        return;
-    }
-    auto outer_rect = window.frame().rect();
-    auto inner_rect = rect;
-    inner_rect.move_by(window.position());
-    // FIXME: This seems slightly wrong; the inner rect shouldn't intersect the border part of the outer rect.
-    inner_rect.intersect(outer_rect);
-    invalidate(inner_rect);
 }
 
 const ClientConnection* WindowManager::active_client() const

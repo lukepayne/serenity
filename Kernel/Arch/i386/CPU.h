@@ -28,8 +28,8 @@
 
 #include <AK/Badge.h>
 #include <AK/Noncopyable.h>
-#include <LibBareMetal/Memory/PhysicalAddress.h>
-#include <LibBareMetal/Memory/VirtualAddress.h>
+#include <Kernel/PhysicalAddress.h>
+#include <Kernel/VirtualAddress.h>
 
 #define PAGE_SIZE 4096
 #define GENERIC_INTERRUPT_HANDLERS_COUNT 128
@@ -40,6 +40,12 @@ namespace Kernel {
 class MemoryManager;
 class PageDirectory;
 class PageTableEntry;
+
+struct [[gnu::packed]] DescriptorTablePointer
+{
+    u16 limit;
+    void* address;
+};
 
 struct [[gnu::packed]] TSS32
 {
@@ -248,6 +254,8 @@ public:
 class GenericInterruptHandler;
 struct RegisterState;
 
+const DescriptorTablePointer& get_gdtr();
+const DescriptorTablePointer& get_idtr();
 void gdt_init();
 void idt_init();
 void sse_init();
@@ -477,8 +485,10 @@ inline FlatPtr offset_in_page(const void* address)
     return offset_in_page((FlatPtr)address);
 }
 
+u32 read_cr0();
 u32 read_cr3();
 void write_cr3(u32);
+u32 read_cr4();
 
 u32 read_dr6();
 
@@ -584,18 +594,31 @@ extern bool g_cpu_supports_sse;
 extern bool g_cpu_supports_tsc;
 extern bool g_cpu_supports_umip;
 
-void stac();
-void clac();
+ALWAYS_INLINE void stac()
+{
+    if (!g_cpu_supports_smap)
+        return;
+    asm volatile("stac" ::
+                     : "cc");
+}
+
+ALWAYS_INLINE void clac()
+{
+    if (!g_cpu_supports_smap)
+        return;
+    asm volatile("clac" ::
+                     : "cc");
+}
 
 class SmapDisabler {
 public:
-    SmapDisabler()
+    ALWAYS_INLINE SmapDisabler()
     {
         m_flags = cpu_flags();
         stac();
     }
 
-    ~SmapDisabler()
+    ALWAYS_INLINE ~SmapDisabler()
     {
         if (!(m_flags & 0x40000))
             clac();

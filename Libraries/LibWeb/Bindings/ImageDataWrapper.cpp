@@ -44,9 +44,9 @@ ImageDataWrapper::ImageDataWrapper(ImageData& impl)
     : Wrapper(*interpreter().global_object().object_prototype())
     , m_impl(impl)
 {
-    put_native_property("width", width_getter, nullptr);
-    put_native_property("height", height_getter, nullptr);
-    put_native_property("data", data_getter, nullptr);
+    define_native_property("width", width_getter, nullptr);
+    define_native_property("height", height_getter, nullptr);
+    define_native_property("data", data_getter, nullptr);
 }
 
 ImageDataWrapper::~ImageDataWrapper()
@@ -55,7 +55,7 @@ ImageDataWrapper::~ImageDataWrapper()
 
 static ImageData* impl_from(JS::Interpreter& interpreter)
 {
-    auto* this_object = interpreter.this_value().to_object(interpreter.heap());
+    auto* this_object = interpreter.this_value().to_object(interpreter);
     if (!this_object) {
         ASSERT_NOT_REACHED();
         return nullptr;

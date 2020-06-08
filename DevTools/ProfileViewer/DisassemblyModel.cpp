@@ -72,7 +72,7 @@ DisassemblyModel::DisassemblyModel(Profile& profile, ProfileNode& node)
 {
     String path;
     if (m_node.address() >= 0xc0000000)
-        path = "/boot/kernel";
+        path = "/boot/Kernel";
     else
         path = profile.executable_path();
     m_file = make<MappedFile>(path);
@@ -136,13 +136,6 @@ String DisassemblyModel::column_name(int column) const
         ASSERT_NOT_REACHED();
         return {};
     }
-}
-
-GUI::Model::ColumnMetadata DisassemblyModel::column_metadata(int column) const
-{
-    if (column == Column::SampleCount)
-        return ColumnMetadata { 0, Gfx::TextAlignment::CenterRight };
-    return {};
 }
 
 struct ColorPair {

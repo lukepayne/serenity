@@ -7,6 +7,7 @@ try {
         1: 23,
         foo,
         bar: "baz",
+        qux: true ? 10 : 20,
         "hello": "friends",
         [1 + 2]: 42,
         ["I am a " + computed + " key"]: foo,
@@ -14,9 +15,11 @@ try {
         duplicate: "world"
     };
     assert(o[1] === 23);
+    assert(o[1n] === 23);
     assert(o["1"] === 23);
     assert(o.foo === "bar");
     assert(o["foo"] === "bar");
+    assert(o.qux === 10),
     assert(o.hello === "friends");
     assert(o["hello"] === "friends");
     assert(o[3] === 42);
@@ -26,6 +29,9 @@ try {
     assert(o.baz === "test");
     assert(o["baz"] === "test");
     o[10] = "123";
+    assert(o[10] === "123");
+    assert(o["10"] === "123");
+    o[10n] = "123";
     assert(o[10] === "123");
     assert(o["10"] === "123");
     o[-1] = "hello friends";
@@ -63,6 +69,17 @@ try {
     assert(a[1] === 2);
     assert(a[2] === 3);
     assert(o4.test === undefined);
+
+    assertIsSyntaxError("({ get ...foo })");
+    assertIsSyntaxError("({ get... foo })");
+    assertIsSyntaxError("({ get foo })");
+    assertIsSyntaxError("({ get foo: bar })");
+    assertIsSyntaxError("({ get [foo]: bar })");
+    assertIsSyntaxError("({ get ...[foo] })");
+    assertIsSyntaxError("({ get foo(bar) {} })");
+    assertIsSyntaxError("({ set foo() {} })");
+    assertIsSyntaxError("({ set foo(bar, baz) {} })");
+    assertIsSyntaxError("({ ...foo: bar })");
 
     console.log("PASS");
 } catch (e) {

@@ -30,12 +30,15 @@
 #include <LibCore/Forward.h>
 #include <LibGfx/Forward.h>
 #include <LibWeb/DOM/HTMLElement.h>
+#include <LibWeb/Loader/ImageResource.h>
 
 namespace Web {
 
 class LayoutDocument;
 
-class HTMLImageElement : public HTMLElement {
+class HTMLImageElement final
+    : public HTMLElement
+    , public ImageResourceClient {
 public:
     using WrapperType = Bindings::HTMLImageElementWrapper;
 
@@ -44,17 +47,23 @@ public:
 
     virtual void parse_attribute(const FlyString& name, const String& value) override;
 
-    String alt() const { return attribute("alt"); }
-    String src() const { return attribute("src"); }
+    String alt() const { return attribute(HTML::AttributeNames::alt); }
+    String src() const { return attribute(HTML::AttributeNames::src); }
     int preferred_width() const;
     int preferred_height() const;
 
     const Gfx::Bitmap* bitmap() const;
     const Gfx::ImageDecoder* image_decoder() const { return m_image_decoder; }
 
-    void set_volatile(Badge<LayoutDocument>, bool);
+    void set_visible_in_viewport(Badge<LayoutDocument>, bool);
 
 private:
+    // ^ImageResource
+    virtual void resource_did_load() override;
+    virtual void resource_did_fail() override;
+    virtual void resource_did_replace_decoder() override;
+    virtual bool is_visible_in_viewport() const override { return m_visible_in_viewport; }
+
     void load_image(const String& src);
 
     void animate();
@@ -62,17 +71,18 @@ private:
     virtual RefPtr<LayoutNode> create_layout_node(const StyleProperties* parent_style) const override;
 
     RefPtr<Gfx::ImageDecoder> m_image_decoder;
-    ByteBuffer m_encoded_data;
 
     size_t m_current_frame_index { 0 };
     size_t m_loops_completed { 0 };
     NonnullRefPtr<Core::Timer> m_timer;
+
+    bool m_visible_in_viewport { false };
 };
 
 template<>
 inline bool is<HTMLImageElement>(const Node& node)
 {
-    return is<Element>(node) && to<Element>(node).tag_name().equals_ignoring_case("img");
+    return is<Element>(node) && to<Element>(node).tag_name() == HTML::TagNames::img;
 }
 
 }

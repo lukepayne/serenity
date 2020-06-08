@@ -24,14 +24,14 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "CMOS.h"
-#include "Process.h"
 #include <AK/Assertions.h>
 #include <AK/Memory.h>
 #include <AK/StringView.h>
 #include <Kernel/Arch/i386/CPU.h>
+#include <Kernel/CMOS.h>
 #include <Kernel/FileSystem/Inode.h>
 #include <Kernel/Multiboot.h>
+#include <Kernel/Process.h>
 #include <Kernel/VM/AnonymousVMObject.h>
 #include <Kernel/VM/ContiguousVMObject.h>
 #include <Kernel/VM/MemoryManager.h>
@@ -39,7 +39,7 @@
 #include <Kernel/VM/PhysicalRegion.h>
 #include <Kernel/VM/PurgeableVMObject.h>
 #include <Kernel/VM/SharedInodeVMObject.h>
-#include <LibBareMetal/StdLib.h>
+#include <Kernel/StdLib.h>
 
 //#define MM_DEBUG
 //#define PAGE_FAULT_DEBUG
@@ -62,8 +62,6 @@ MemoryManager::MemoryManager()
     m_kernel_page_directory = PageDirectory::create_kernel_page_directory();
     parse_memory_map();
     write_cr3(kernel_page_directory().cr3());
-    setup_low_identity_mapping();
-    setup_low_pseudo_identity_mapping();
     protect_kernel_image();
 
     m_shared_zero_page = allocate_user_physical_page();
@@ -71,36 +69,6 @@ MemoryManager::MemoryManager()
 
 MemoryManager::~MemoryManager()
 {
-}
-
-void MemoryManager::setup_low_pseudo_identity_mapping()
-{
-    // This code switches the pseudo-identity mapping (8 first MB above 3G mark) from 2MB pages to 4KB pages.
-    // The boot code sets it up as 2MB huge pages for convenience. But we need 4KB pages to be able to protect
-    // the kernel soon!
-
-    for (size_t i = 0; i < 4; ++i) {
-        m_low_pseudo_identity_mapping_pages[i] = allocate_supervisor_physical_page();
-        FlatPtr base = i * (2 * MB);
-        auto* page_table = (PageTableEntry*)quickmap_page(*m_low_pseudo_identity_mapping_pages[i]);
-        for (size_t j = 0; j < 512; ++j) {
-            auto& pte = page_table[j];
-            pte.set_physical_page_base(base + j * PAGE_SIZE);
-            pte.set_writable(true);
-            pte.set_present(true);
-            pte.set_execute_disabled(false);
-            pte.set_user_allowed(false);
-        }
-        unquickmap_page();
-    }
-
-    auto* pd = quickmap_pd(*m_kernel_page_directory, 3);
-    for (size_t i = 0; i < 4; ++i) {
-        pd[i].set_huge(false);
-        pd[i].set_page_table_base(m_low_pseudo_identity_mapping_pages[i]->paddr().get());
-    }
-
-    flush_entire_tlb();
 }
 
 void MemoryManager::protect_kernel_image()
@@ -117,34 +85,6 @@ void MemoryManager::protect_kernel_image()
             auto& pte = ensure_pte(kernel_page_directory(), VirtualAddress(i));
             pte.set_execute_disabled(true);
         }
-    }
-}
-
-void MemoryManager::setup_low_identity_mapping()
-{
-    m_low_page_table = allocate_user_physical_page(ShouldZeroFill::Yes);
-
-    auto* pd_zero = quickmap_pd(kernel_page_directory(), 0);
-    pd_zero[1].set_present(false);
-    pd_zero[2].set_present(false);
-    pd_zero[3].set_present(false);
-
-    auto& pde_zero = pd_zero[0];
-    pde_zero.set_page_table_base(m_low_page_table->paddr().get());
-    pde_zero.set_present(true);
-    pde_zero.set_huge(false);
-    pde_zero.set_writable(true);
-    pde_zero.set_user_allowed(false);
-    if (g_cpu_supports_nx)
-        pde_zero.set_execute_disabled(true);
-
-    for (FlatPtr offset = (1 * MB); offset < (2 * MB); offset += PAGE_SIZE) {
-        auto& page_table_page = m_low_page_table;
-        auto& pte = quickmap_pt(page_table_page->paddr())[offset / PAGE_SIZE];
-        pte.set_physical_page_base(offset);
-        pte.set_user_allowed(false);
-        pte.set_present(offset != 0);
-        pte.set_writable(offset < (1 * MB));
     }
 }
 
@@ -271,8 +211,6 @@ void MemoryManager::initialize()
 
 Region* MemoryManager::kernel_region_from_vaddr(VirtualAddress vaddr)
 {
-    if (vaddr.get() < 0xc0000000)
-        return nullptr;
     for (auto& region : MM.m_kernel_regions) {
         if (region.contains(vaddr))
             return &region;
@@ -295,16 +233,16 @@ Region* MemoryManager::user_region_from_vaddr(Process& process, VirtualAddress v
 
 Region* MemoryManager::region_from_vaddr(Process& process, VirtualAddress vaddr)
 {
-    if (auto* region = kernel_region_from_vaddr(vaddr))
+    if (auto* region = user_region_from_vaddr(process, vaddr))
         return region;
-    return user_region_from_vaddr(process, vaddr);
+    return kernel_region_from_vaddr(vaddr);
 }
 
 const Region* MemoryManager::region_from_vaddr(const Process& process, VirtualAddress vaddr)
 {
-    if (auto* region = kernel_region_from_vaddr(vaddr))
+    if (auto* region = user_region_from_vaddr(const_cast<Process&>(process), vaddr))
         return region;
-    return user_region_from_vaddr(const_cast<Process&>(process), vaddr);
+    return kernel_region_from_vaddr(vaddr);
 }
 
 Region* MemoryManager::region_from_vaddr(VirtualAddress vaddr)
@@ -370,6 +308,18 @@ OwnPtr<Region> MemoryManager::allocate_kernel_region(PhysicalAddress paddr, size
 {
     ASSERT(!(size % PAGE_SIZE));
     auto range = kernel_page_directory().range_allocator().allocate_anywhere(size);
+    if (!range.is_valid())
+        return nullptr;
+    auto vmobject = AnonymousVMObject::create_for_physical_range(paddr, size);
+    if (!vmobject)
+        return nullptr;
+    return allocate_kernel_region_with_vmobject(range, *vmobject, name, access, user_accessible, cacheable);
+}
+
+OwnPtr<Region> MemoryManager::allocate_kernel_region_identity(PhysicalAddress paddr, size_t size, const StringView& name, u8 access, bool user_accessible, bool cacheable)
+{
+    ASSERT(!(size % PAGE_SIZE));
+    auto range = kernel_page_directory().identity_range_allocator().allocate_specific(VirtualAddress(paddr.get()), size);
     if (!range.is_valid())
         return nullptr;
     auto vmobject = AnonymousVMObject::create_for_physical_range(paddr, size);
@@ -574,11 +524,11 @@ void MemoryManager::flush_tlb(VirtualAddress vaddr)
                  : "memory");
 }
 
-extern "C" PageTableEntry boot_pd3_pde1023_pt[1024];
+extern "C" PageTableEntry boot_pd3_pt1023[1024];
 
 PageDirectoryEntry* MemoryManager::quickmap_pd(PageDirectory& directory, size_t pdpt_index)
 {
-    auto& pte = boot_pd3_pde1023_pt[4];
+    auto& pte = boot_pd3_pt1023[4];
     auto pd_paddr = directory.m_directory_pages[pdpt_index]->paddr();
     if (pte.physical_page_base() != pd_paddr.as_ptr()) {
 #ifdef MM_DEBUG
@@ -595,7 +545,7 @@ PageDirectoryEntry* MemoryManager::quickmap_pd(PageDirectory& directory, size_t 
 
 PageTableEntry* MemoryManager::quickmap_pt(PhysicalAddress pt_paddr)
 {
-    auto& pte = boot_pd3_pde1023_pt[8];
+    auto& pte = boot_pd3_pt1023[8];
     if (pte.physical_page_base() != pt_paddr.as_ptr()) {
 #ifdef MM_DEBUG
         dbg() << "quickmap_pt: Mapping P" << (void*)pt_paddr.as_ptr() << " at 0xffe08000 in pte @ " << &pte;
@@ -615,7 +565,7 @@ u8* MemoryManager::quickmap_page(PhysicalPage& physical_page)
     ASSERT(!m_quickmap_in_use);
     m_quickmap_in_use = true;
 
-    auto& pte = boot_pd3_pde1023_pt[0];
+    auto& pte = boot_pd3_pt1023[0];
     if (pte.physical_page_base() != physical_page.paddr().as_ptr()) {
 #ifdef MM_DEBUG
         dbg() << "quickmap_page: Mapping P" << (void*)physical_page.paddr().as_ptr() << " at 0xffe00000 in pte @ " << &pte;
@@ -633,7 +583,7 @@ void MemoryManager::unquickmap_page()
 {
     ASSERT_INTERRUPTS_DISABLED();
     ASSERT(m_quickmap_in_use);
-    auto& pte = boot_pd3_pde1023_pt[0];
+    auto& pte = boot_pd3_pt1023[0];
     pte.clear();
     flush_tlb(VirtualAddress(0xffe00000));
     m_quickmap_in_use = false;
@@ -668,7 +618,7 @@ bool MemoryManager::validate_range(const Process& process, VirtualAddress base_v
                 return false;
             }
         }
-        vaddr = vaddr.offset(PAGE_SIZE);
+        vaddr = region->range().end();
     }
     return true;
 }
@@ -725,7 +675,7 @@ void MemoryManager::unregister_vmobject(VMObject& vmobject)
 void MemoryManager::register_region(Region& region)
 {
     InterruptDisabler disabler;
-    if (region.vaddr().get() >= 0xc0000000)
+    if (region.is_kernel())
         m_kernel_regions.append(&region);
     else
         m_user_regions.append(&region);
@@ -734,7 +684,7 @@ void MemoryManager::register_region(Region& region)
 void MemoryManager::unregister_region(Region& region)
 {
     InterruptDisabler disabler;
-    if (region.vaddr().get() >= 0xc0000000)
+    if (region.is_kernel())
         m_kernel_regions.remove(&region);
     else
         m_user_regions.remove(&region);

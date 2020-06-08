@@ -108,7 +108,7 @@ void Compositor::compose()
 {
     auto& wm = WindowManager::the();
     if (m_wallpaper_mode == WallpaperMode::Unchecked)
-        m_wallpaper_mode = mode_to_enum(wm.wm_config()->read_entry("Background", "Mode", "simple"));
+        m_wallpaper_mode = mode_to_enum(wm.config()->read_entry("Background", "Mode", "simple"));
     auto& ws = Screen::the();
 
     auto dirty_rects = move(m_dirty_rects);
@@ -133,14 +133,14 @@ void Compositor::compose()
     };
 
     Color background_color = wm.palette().desktop_background();
-    String background_color_entry = wm.wm_config()->read_entry("Background", "Color", "");
+    String background_color_entry = wm.config()->read_entry("Background", "Color", "");
     if (!background_color_entry.is_empty()) {
         background_color = Color::from_string(background_color_entry).value_or(background_color);
     }
 
     // Paint the wallpaper.
     for (auto& dirty_rect : dirty_rects.rects()) {
-        if (wm.any_opaque_window_contains_rect(dirty_rect))
+        if (any_opaque_window_contains_rect(dirty_rect))
             continue;
         // FIXME: If the wallpaper is opaque, no need to fill with color!
         m_back_painter->fill_rect(dirty_rect, background_color);
@@ -172,7 +172,7 @@ void Compositor::compose()
         m_back_painter->add_clip_rect(window.frame().rect());
         RefPtr<Gfx::Bitmap> backing_store = window.backing_store();
         for (auto& dirty_rect : dirty_rects.rects()) {
-            if (wm.any_opaque_window_above_this_one_contains_rect(window, dirty_rect))
+            if (!window.is_fullscreen() && any_opaque_window_above_this_one_contains_rect(window, dirty_rect))
                 continue;
             Gfx::PainterStateSaver saver(*m_back_painter);
             m_back_painter->add_clip_rect(dirty_rect);
@@ -320,8 +320,8 @@ void Compositor::invalidate(const Gfx::Rect& a_rect)
 bool Compositor::set_background_color(const String& background_color)
 {
     auto& wm = WindowManager::the();
-    wm.wm_config()->write_entry("Background", "Color", background_color);
-    bool ret_val = wm.wm_config()->sync();
+    wm.config()->write_entry("Background", "Color", background_color);
+    bool ret_val = wm.config()->sync();
 
     if (ret_val)
         Compositor::invalidate();
@@ -332,8 +332,8 @@ bool Compositor::set_background_color(const String& background_color)
 bool Compositor::set_wallpaper_mode(const String& mode)
 {
     auto& wm = WindowManager::the();
-    wm.wm_config()->write_entry("Background", "Mode", mode);
-    bool ret_val = wm.wm_config()->sync();
+    wm.config()->write_entry("Background", "Mode", mode);
+    bool ret_val = wm.config()->sync();
 
     if (ret_val) {
         m_wallpaper_mode = mode_to_enum(mode);
@@ -502,6 +502,73 @@ void Compositor::decrement_display_link_count(Badge<ClientConnection>)
     --m_display_link_count;
     if (!m_display_link_count)
         m_display_link_notify_timer->stop();
+}
+
+bool Compositor::any_opaque_window_contains_rect(const Gfx::Rect& rect)
+{
+    bool found_containing_window = false;
+    WindowManager::the().for_each_visible_window_from_back_to_front([&](Window& window) {
+        if (window.is_minimized())
+            return IterationDecision::Continue;
+        if (window.opacity() < 1.0f)
+            return IterationDecision::Continue;
+        if (window.has_alpha_channel()) {
+            // FIXME: Just because the window has an alpha channel doesn't mean it's not opaque.
+            //        Maybe there's some way we could know this?
+            return IterationDecision::Continue;
+        }
+        if (window.frame().rect().contains(rect)) {
+            found_containing_window = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+    return found_containing_window;
+};
+
+
+bool Compositor::any_opaque_window_above_this_one_contains_rect(const Window& a_window, const Gfx::Rect& rect)
+{
+    bool found_containing_window = false;
+    bool checking = false;
+    WindowManager::the().for_each_visible_window_from_back_to_front([&](Window& window) {
+        if (&window == &a_window) {
+            checking = true;
+            return IterationDecision::Continue;
+        }
+        if (!checking)
+            return IterationDecision::Continue;
+        if (!window.is_visible())
+            return IterationDecision::Continue;
+        if (window.is_minimized())
+            return IterationDecision::Continue;
+        if (window.opacity() < 1.0f)
+            return IterationDecision::Continue;
+        if (window.has_alpha_channel())
+            return IterationDecision::Continue;
+        if (window.frame().rect().contains(rect)) {
+            found_containing_window = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+    return found_containing_window;
+};
+
+void Compositor::recompute_occlusions()
+{
+    auto& wm = WindowManager::the();
+    wm.for_each_visible_window_from_back_to_front([&](Window& window) {
+        if (wm.m_switcher.is_visible()) {
+            window.set_occluded(false);
+        } else {
+            if (any_opaque_window_above_this_one_contains_rect(window, window.frame().rect()))
+                window.set_occluded(true);
+            else
+                window.set_occluded(false);
+        }
+        return IterationDecision::Continue;
+    });
 }
 
 }

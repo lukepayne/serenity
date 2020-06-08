@@ -42,12 +42,14 @@ private:
     virtual bool has_constructor() const override { return true; }
     virtual const char* class_name() const override { return "ObjectConstructor"; }
 
-    static Value define_property(Interpreter&);
+    static Value define_property_(Interpreter&);
     static Value is(Interpreter&);
     static Value get_own_property_descriptor(Interpreter&);
     static Value get_own_property_names(Interpreter&);
     static Value get_prototype_of(Interpreter&);
     static Value set_prototype_of(Interpreter&);
+    static Value is_extensible(Interpreter&);
+    static Value prevent_extensions(Interpreter&);
     static Value keys(Interpreter&);
     static Value values(Interpreter&);
     static Value entries(Interpreter&);

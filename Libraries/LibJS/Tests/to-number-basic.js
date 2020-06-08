@@ -27,15 +27,17 @@ try {
     assert(-42 === -42);
     assert(+1.23 === 1.23);
     assert(-1.23 === -1.23);
-    // FIXME: returns NaN
-    // assert(+"1.23" === 1.23)
-    // assert(-"1.23" === -1.23)
+    assert(+"1.23" === 1.23)
+    assert(-"1.23" === -1.23)
     assert(+"Infinity" === Infinity);
     assert(+"+Infinity" === Infinity);
     assert(+"-Infinity" === -Infinity);
     assert(-"Infinity" === -Infinity);
     assert(-"+Infinity" === -Infinity);
     assert(-"-Infinity" === Infinity);
+    assert(+"  \r  \t \n " === 0);
+    assert(+"  \n  \t    Infinity   \r   " === Infinity);
+    assert(+"\r     \n1.23   \t\t\t  \n" === 1.23);
 
     assert(isNaN(+undefined));
     assert(isNaN(-undefined));
