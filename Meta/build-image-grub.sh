@@ -1,14 +1,27 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 set -e
 
-die() {
-    echo "die: $*"
-    exit 1
-}
+script_path=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
+
+. "${script_path}/shell_include.sh"
 
 if [ "$(id -u)" != 0 ]; then
-    die "this script needs to run as root"
+    set +e
+    ${SUDO} -- "${SHELL}" -c "\"$0\" $* || exit 42"
+    case $? in
+        1)
+            die "this script needs to run as root"
+            ;;
+        42)
+            exit 1
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+else
+    : "${SUDO_UID:=0}" "${SUDO_GID:=0}"
 fi
 
 grub=$(command -v grub-install 2>/dev/null) || true
@@ -21,7 +34,12 @@ if [ -z "$grub" ]; then
 fi
 echo "using grub-install at ${grub}"
 
+DISK_SIZE=$(($(disk_usage "$SERENITY_SOURCE_DIR/Base") + $(disk_usage Root) + 300))
+
 echo "setting up disk image..."
+if [ "$1" = "ebr" ]; then
+    DISK_SIZE=
+fi
 dd if=/dev/zero of=grub_disk_image bs=1M count="${DISK_SIZE:-800}" status=none || die "couldn't create disk image"
 chown "$SUDO_UID":"$SUDO_GID" grub_disk_image || die "couldn't adjust permissions on disk image"
 echo "done"
@@ -51,11 +69,11 @@ trap cleanup EXIT
 
 printf "creating partition table... "
 if [ "$1" = "mbr" ]; then
-    parted -s "${dev}" mklabel msdos mkpart primary ext2 32k 100% -a minimal set 1 boot on || die "couldn't partition disk"
+    parted -s "${dev}" mklabel msdos mkpart primary ext2 1MiB 100% -a minimal set 1 boot on || die "couldn't partition disk"
     partition_number="p1"
     partition_scheme="mbr"
 elif [ "$1" = "gpt" ]; then
-    parted -s "${dev}" mklabel gpt mkpart BIOSBOOT ext3 1MiB 8MiB mkpart OS ext2 8MiB 700MiB set 1 bios_grub || die "couldn't partition disk"
+    parted -s "${dev}" mklabel gpt mkpart BIOSBOOT ext3 1MiB 8MiB mkpart OS ext2 8MiB 290MiB set 1 bios_grub || die "couldn't partition disk"
     partition_number="p2"
     partition_scheme="gpt"
 elif [ "$1" = "ebr" ]; then
@@ -63,7 +81,7 @@ elif [ "$1" = "ebr" ]; then
     partition_number="p5"
     partition_scheme="ebr"
 else
-    parted -s "${dev}" mklabel msdos mkpart primary ext2 32k 100% -a minimal set 1 boot on || die "couldn't partition disk"
+    parted -s "${dev}" mklabel msdos mkpart primary ext2 1MiB 100% -a minimal set 1 boot on || die "couldn't partition disk"
     partition_number="p1"
     partition_scheme="mbr"
 fi
@@ -75,7 +93,7 @@ dd if=/dev/zero of="${dev}${partition_number}" bs=1M count=1 status=none || die 
 echo "done"
 
 printf "creating new filesystem... "
-mke2fs -q -I 128 "${dev}${partition_number}" || die "couldn't create filesystem"
+mke2fs -q "${dev}${partition_number}" || die "couldn't create filesystem"
 echo "done"
 
 printf "mounting filesystem... "
@@ -83,15 +101,20 @@ mkdir -p mnt
 mount "${dev}${partition_number}" mnt/ || die "couldn't mount filesystem"
 echo "done"
 
-script_path=$(cd -P -- "$(dirname -- "$0")" && pwd -P)
 "$script_path/build-root-filesystem.sh"
 
-echo "installing grub using $grub..."
+if [ -z "$2" ]; then
+    grub_cfg="$SERENITY_SOURCE_DIR"/Meta/grub-"${partition_scheme}".cfg
+else
+    grub_cfg=$2
+fi
+
+echo "installing grub using $grub with $grub_cfg..."
 $grub --boot-directory=mnt/boot --target=i386-pc --modules="ext2 part_msdos" "${dev}"
 
 if [ -d mnt/boot/grub2 ]; then
-    cp "$SERENITY_ROOT"/Meta/grub-"${partition_scheme}".cfg mnt/boot/grub2/grub.cfg
+    cp "$grub_cfg" mnt/boot/grub2/grub.cfg
 else
-    cp "$SERENITY_ROOT"/Meta/grub-"${partition_scheme}".cfg mnt/boot/grub/grub.cfg
+    cp "$grub_cfg" mnt/boot/grub/grub.cfg
 fi
 echo "done"

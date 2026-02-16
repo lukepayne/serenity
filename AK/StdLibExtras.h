@@ -1,56 +1,84 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#define UNUSED_PARAM(x) (void)x
+#include <AK/Platform.h>
 
-inline constexpr unsigned round_up_to_power_of_two(unsigned value, unsigned power_of_two)
+#if defined(AK_COMPILER_CLANG)
+#    pragma clang diagnostic ignored "-Wunqualified-std-cast-call"
+#endif
+
+#include <AK/StdLibExtraDetails.h>
+#include <AK/StdShim.h>
+
+#include <AK/Assertions.h>
+
+namespace AK {
+
+template<typename T, typename U>
+constexpr auto round_up_to_power_of_two(T value, U power_of_two)
+requires(AK::Detail::IsIntegral<T> && AK::Detail::IsIntegral<U>)
 {
     return ((value - 1) & ~(power_of_two - 1)) + power_of_two;
 }
 
+template<typename T>
+constexpr bool is_power_of_two(T value)
+requires(AK::Detail::IsIntegral<T>)
+{
+    return value && !((value) & (value - 1));
+}
+
+template<typename... Args>
+void compiletime_fail(Args...);
+
+}
+
+#if !USING_AK_GLOBALLY || defined(AK_DONT_REPLACE_STD)
+#    define AK_REPLACED_STD_NAMESPACE AK::replaced_std
+#else
+#    define AK_REPLACED_STD_NAMESPACE std
+#endif
+
+namespace AK::Detail {
+template<typename T>
+struct _RawPtr {
+    using Type = T*;
+};
+}
+
 namespace AK {
 
-template<typename T>
-inline constexpr T min(const T& a, const T& b)
+struct Empty {
+    constexpr bool operator==(Empty const&) const = default;
+};
+
+template<typename T, typename SizeType = decltype(sizeof(T)), SizeType N>
+constexpr SizeType array_size(T (&)[N])
 {
-    return a < b ? a : b;
+    return N;
 }
 
 template<typename T>
-inline constexpr T max(const T& a, const T& b)
+constexpr T min(T const& a, IdentityType<T> const& b)
+{
+    return b < a ? b : a;
+}
+
+template<typename T>
+constexpr T max(T const& a, IdentityType<T> const& b)
 {
     return a < b ? b : a;
 }
 
 template<typename T>
-inline constexpr T clamp(const T& value, const T& min, const T& max)
+constexpr T clamp(T const& value, IdentityType<T> const& min, IdentityType<T> const& max)
 {
-    ASSERT(max >= min);
+    VERIFY(max >= min);
     if (value > max)
         return max;
     if (value < min)
@@ -59,383 +87,135 @@ inline constexpr T clamp(const T& value, const T& min, const T& max)
 }
 
 template<typename T, typename U>
-inline constexpr T ceil_div(T a, U b)
+constexpr T mix(T const& v1, T const& v2, U const& interpolation) // aka lerp
 {
-    static_assert(sizeof(T) == sizeof(U));
+    return v1 + (v2 - v1) * interpolation;
+}
+
+template<typename T>
+constexpr T mod(T const& a, IdentityType<T> const& b)
+{
+    VERIFY(b != 0);
+    return (a % b + b) % b;
+}
+
+template<typename T, typename U>
+constexpr T ceil_div(T a, U b)
+{
     T result = a / b;
-    if ((a % b) != 0)
+    if ((a % b) != 0 && (a > 0) == (b > 0))
         ++result;
     return result;
 }
 
-#ifdef __clang__
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wconsumed"
-#endif
-template<typename T>
-inline T&& move(T& arg)
+template<typename T, typename U>
+constexpr T floor_div(T a, U b)
 {
-    return static_cast<T&&>(arg);
+    T result = a / b;
+    if ((a % b) != 0 && (a > 0) != (b > 0))
+        --result;
+    return result;
 }
-#ifdef __clang__
-#    pragma clang diagnostic pop
-#endif
 
 template<typename T, typename U>
 inline void swap(T& a, U& b)
 {
-    U tmp = move((U&)a);
-    a = (T &&) move(b);
+    if (&a == &b)
+        return;
+    U tmp = move(static_cast<U&>(a));
+    a = static_cast<T&&>(move(b));
     b = move(tmp);
 }
 
-template<bool B, class T = void>
-struct EnableIf {
-};
-
-template<class T>
-struct EnableIf<true, T> {
-    typedef T Type;
-};
-
-template<class T>
-struct RemoveConst {
-    typedef T Type;
-};
-template<class T>
-struct RemoveConst<const T> {
-    typedef T Type;
-};
-template<class T>
-struct RemoveVolatile {
-    typedef T Type;
-};
-template<class T>
-struct RemoveVolatile<volatile T> {
-    typedef T Type;
-};
-template<class T>
-struct RemoveCV {
-    typedef typename RemoveVolatile<typename RemoveConst<T>::Type>::Type Type;
-};
-
-template<class T, T v>
-struct IntegralConstant {
-    static constexpr T value = v;
-    typedef T ValueType;
-    typedef IntegralConstant Type;
-    constexpr operator ValueType() const { return value; }
-    constexpr ValueType operator()() const { return value; }
-};
-
-typedef IntegralConstant<bool, false> FalseType;
-typedef IntegralConstant<bool, true> TrueType;
-
-template<class T>
-struct IsLvalueReference : FalseType {
-};
-
-template<class T>
-struct IsLvalueReference<T&> : TrueType {
-};
-
-template<class T>
-struct __IsPointerHelper : FalseType {
-};
-
-template<class T>
-struct __IsPointerHelper<T*> : TrueType {
-};
-
-template<class T>
-struct IsPointer : __IsPointerHelper<typename RemoveCV<T>::Type> {
-};
-
-template<class>
-struct IsFunction : FalseType {
-};
-
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...)> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...)> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) volatile> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) volatile> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const volatile> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const volatile> : TrueType {
-};
-
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...)&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...)&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) volatile&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) volatile&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const volatile&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const volatile&> : TrueType {
-};
-
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) &&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) &&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const&&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const&&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) volatile&&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) volatile&&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args...) const volatile&&> : TrueType {
-};
-template<class Ret, class... Args>
-struct IsFunction<Ret(Args..., ...) const volatile&&> : TrueType {
-};
-
-template<class T>
-struct IsRvalueReference : FalseType {
-};
-template<class T>
-struct IsRvalueReference<T&&> : TrueType {
-};
-
-template<class T>
-struct RemovePointer {
-    typedef T Type;
-};
-template<class T>
-struct RemovePointer<T*> {
-    typedef T Type;
-};
-template<class T>
-struct RemovePointer<T* const> {
-    typedef T Type;
-};
-template<class T>
-struct RemovePointer<T* volatile> {
-    typedef T Type;
-};
-template<class T>
-struct RemovePointer<T* const volatile> {
-    typedef T Type;
-};
-
-template<typename T, typename U>
-struct IsSame {
-    enum {
-        value = 0
-    };
-};
-
-template<typename T>
-struct IsSame<T, T> {
-    enum {
-        value = 1
-    };
-};
-
-template<bool condition, class TrueType, class FalseType>
-struct Conditional {
-    typedef TrueType Type;
-};
-
-template<class TrueType, class FalseType>
-struct Conditional<false, TrueType, FalseType> {
-    typedef FalseType Type;
-};
-
-template<typename T>
-struct RemoveReference {
-    typedef T Type;
-};
-template<class T>
-struct RemoveReference<T&> {
-    typedef T Type;
-};
-template<class T>
-struct RemoveReference<T&&> {
-    typedef T Type;
-};
-
-template<class T>
-inline constexpr T&& forward(typename RemoveReference<T>::Type& param)
-{
-    return static_cast<T&&>(param);
-}
-
-template<class T>
-inline constexpr T&& forward(typename RemoveReference<T>::Type&& param) noexcept
-{
-    static_assert(!IsLvalueReference<T>::value, "Can't forward an rvalue as an lvalue.");
-    return static_cast<T&&>(param);
-}
-
-template<typename T>
-struct MakeUnsigned {
-};
-
-template<>
-struct MakeUnsigned<char> {
-    typedef unsigned char type;
-};
-
-template<>
-struct MakeUnsigned<short> {
-    typedef unsigned short type;
-};
-
-template<>
-struct MakeUnsigned<int> {
-    typedef unsigned type;
-};
-
-template<>
-struct MakeUnsigned<long> {
-    typedef unsigned long type;
-};
-
-template<>
-struct MakeUnsigned<long long> {
-    typedef unsigned long long type;
-};
-
-template<>
-struct MakeUnsigned<unsigned char> {
-    typedef unsigned char type;
-};
-
-template<>
-struct MakeUnsigned<unsigned short> {
-    typedef unsigned short type;
-};
-
-template<>
-struct MakeUnsigned<unsigned int> {
-    typedef unsigned type;
-};
-
-template<>
-struct MakeUnsigned<unsigned long> {
-    typedef unsigned long type;
-};
-
-template<>
-struct MakeUnsigned<unsigned long long> {
-    typedef unsigned long long type;
-};
-
-template<typename T>
-struct MakeSigned {
-};
-
-template<>
-struct MakeSigned<char> {
-    typedef char type;
-};
-
-template<>
-struct MakeSigned<short> {
-    typedef short type;
-};
-
-template<>
-struct MakeSigned<int> {
-    typedef int type;
-};
-
-template<>
-struct MakeSigned<long> {
-    typedef long type;
-};
-
-template<>
-struct MakeSigned<long long> {
-    typedef long long type;
-};
-
-template<>
-struct MakeSigned<unsigned char> {
-    typedef char type;
-};
-
-template<>
-struct MakeSigned<unsigned short> {
-    typedef short type;
-};
-
-template<>
-struct MakeSigned<unsigned int> {
-    typedef int type;
-};
-
-template<>
-struct MakeSigned<unsigned long> {
-    typedef long type;
-};
-
-template<>
-struct MakeSigned<unsigned long long> {
-    typedef long long type;
-};
-
 template<typename T, typename U = T>
-inline constexpr T exchange(T& slot, U&& value)
+constexpr T exchange(T& slot, U&& value)
 {
     T old_value = move(slot);
-    slot = forward<U>(value);
+    slot = AK::forward<U>(value);
     return old_value;
 }
 
+template<typename T>
+using RawPtr = typename Detail::_RawPtr<T>::Type;
+
+template<typename V>
+constexpr decltype(auto) to_underlying(V value)
+requires(IsEnum<V>)
+{
+    return static_cast<UnderlyingType<V>>(value);
 }
 
+constexpr bool is_constant_evaluated()
+{
+#if __has_builtin(__builtin_is_constant_evaluated)
+    return __builtin_is_constant_evaluated();
+#else
+    return false;
+#endif
+}
+
+template<typename T>
+ALWAYS_INLINE constexpr void taint_for_optimizer(T& value)
+requires(IsIntegral<T>)
+{
+    if (!is_constant_evaluated()) {
+        asm volatile(""
+            : "+r"(value));
+    }
+}
+
+template<typename T>
+ALWAYS_INLINE constexpr void taint_for_optimizer(T& value)
+requires(!IsIntegral<T>)
+{
+    if (!is_constant_evaluated()) {
+        asm volatile(""
+            :
+            : "m"(value)
+            : "memory");
+    }
+}
+
+// These can't be exported into the global namespace as they would clash with the C standard library.
+
+#define __DEFINE_GENERIC_ABS(type, zero, intrinsic) \
+    constexpr type abs(type num)                    \
+    {                                               \
+        if (is_constant_evaluated())                \
+            return num < (zero) ? -num : num;       \
+        return __builtin_##intrinsic(num);          \
+    }
+
+__DEFINE_GENERIC_ABS(int, 0, abs);
+__DEFINE_GENERIC_ABS(long, 0L, labs);
+__DEFINE_GENERIC_ABS(long long, 0LL, llabs);
+#ifndef KERNEL
+__DEFINE_GENERIC_ABS(float, 0.0F, fabsf);
+__DEFINE_GENERIC_ABS(double, 0.0, fabs);
+__DEFINE_GENERIC_ABS(long double, 0.0L, fabsl);
+#endif
+
+#undef __DEFINE_GENERIC_ABS
+
+}
+
+#if USING_AK_GLOBALLY
+using AK::array_size;
 using AK::ceil_div;
 using AK::clamp;
-using AK::Conditional;
+using AK::Empty;
 using AK::exchange;
+using AK::floor_div;
 using AK::forward;
-using AK::IsSame;
-using AK::MakeSigned;
-using AK::MakeUnsigned;
+using AK::is_constant_evaluated;
+using AK::is_power_of_two;
 using AK::max;
 using AK::min;
+using AK::mix;
+using AK::mod;
 using AK::move;
-using AK::RemoveConst;
+using AK::RawPtr;
+using AK::round_up_to_power_of_two;
 using AK::swap;
+using AK::to_underlying;
+#endif

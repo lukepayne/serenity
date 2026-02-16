@@ -1,69 +1,107 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Max Wipfli <max.wipfli@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/String.h>
+#include <AK/ByteString.h>
 #include <AK/Vector.h>
+
+// On Linux distros that use mlibc `basename` is defined as a macro that expands to `__mlibc_gnu_basename` or `__mlibc_gnu_basename_c`, so we undefine it.
+#if defined(AK_OS_LINUX) && defined(basename)
+#    undef basename
+#endif
 
 namespace AK {
 
 class LexicalPath {
 public:
-    LexicalPath() { }
-    explicit LexicalPath(const StringView&);
+    enum StripExtension {
+        No,
+        Yes
+    };
 
-    bool is_valid() const { return m_is_valid; }
-    bool is_absolute() const { return m_is_absolute; }
-    const String& string() const { return m_string; }
+    explicit LexicalPath(ByteString);
 
-    const String& dirname() const { return m_dirname; }
-    const String& basename() const { return m_basename; }
-    const String& title() const { return m_title; }
-    const String& extension() const { return m_extension; }
+    bool is_absolute() const { return !m_string.is_empty() && m_string[0] == '/'; }
+    bool is_canonical() const;
+    ByteString const& string() const { return m_string; }
 
-    const Vector<String>& parts() const { return m_parts; }
+    StringView dirname() const { return m_dirname; }
+    StringView basename(StripExtension s = StripExtension::No) const { return s == StripExtension::No ? m_basename : m_basename.substring_view(0, m_basename.length() - m_extension.length() - 1); }
+    StringView title() const { return m_title; }
+    StringView extension() const { return m_extension; }
 
-    bool has_extension(const StringView&) const;
+    Vector<StringView> const& parts_view() const { return m_parts; }
+    [[nodiscard]] Vector<ByteString> parts() const;
 
-    static String canonicalized_path(const StringView&);
+    bool has_extension(StringView) const;
+    bool is_child_of(LexicalPath const& possible_parent) const;
+
+    [[nodiscard]] LexicalPath append(StringView) const;
+    [[nodiscard]] LexicalPath prepend(StringView) const;
+    [[nodiscard]] LexicalPath parent() const;
+
+    [[nodiscard]] static ByteString canonicalized_path(ByteString);
+    [[nodiscard]] static ByteString absolute_path(ByteString dir_path, ByteString target);
+    [[nodiscard]] static ByteString relative_path(StringView absolute_path, StringView prefix);
+
+    template<typename... S>
+    [[nodiscard]] static LexicalPath join(StringView first, S&&... rest)
+    {
+        StringBuilder builder;
+        builder.append(first);
+        ((builder.append('/'), builder.append(forward<S>(rest))), ...);
+
+        return LexicalPath { builder.to_byte_string() };
+    }
+
+    [[nodiscard]] static ByteString dirname(ByteString path)
+    {
+        auto lexical_path = LexicalPath(move(path));
+        return lexical_path.dirname();
+    }
+
+    [[nodiscard]] static ByteString basename(ByteString path, StripExtension s = StripExtension::No)
+    {
+        auto lexical_path = LexicalPath(move(path));
+        return lexical_path.basename(s);
+    }
+
+    [[nodiscard]] static ByteString title(ByteString path)
+    {
+        auto lexical_path = LexicalPath(move(path));
+        return lexical_path.title();
+    }
+
+    [[nodiscard]] static ByteString extension(ByteString path)
+    {
+        auto lexical_path = LexicalPath(move(path));
+        return lexical_path.extension();
+    }
 
 private:
-    void canonicalize();
+    Vector<StringView> m_parts;
+    ByteString m_string;
+    StringView m_dirname;
+    StringView m_basename;
+    StringView m_title;
+    StringView m_extension;
+};
 
-    Vector<String> m_parts;
-    String m_string;
-    String m_dirname;
-    String m_basename;
-    String m_title;
-    String m_extension;
-    bool m_is_valid { false };
-    bool m_is_absolute { false };
+template<>
+struct Formatter<LexicalPath> : Formatter<StringView> {
+    ErrorOr<void> format(FormatBuilder& builder, LexicalPath const& value)
+    {
+        return Formatter<StringView>::format(builder, value.string());
+    }
 };
 
 };
 
+#if USING_AK_GLOBALLY
 using AK::LexicalPath;
+#endif

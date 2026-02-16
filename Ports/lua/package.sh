@@ -1,6 +1,24 @@
-#!/bin/bash ../.port_include.sh
-port=lua
-version=5.3.5
-files="http://www.lua.org/ftp/lua-5.3.5.tar.gz lua-5.3.5.tar.gz 4f4b4f323fd3514a68e0ab3da8ce3455"
-makeopts="-j$(nproc) generic"
-installopts="INSTALL_TOP=$SERENITY_ROOT/Build/Root/"
+#!/usr/bin/env -S bash ../.port_include.sh
+port='lua'
+version='5.4.6'
+files=(
+    "http://www.lua.org/ftp/lua-${version}.tar.gz#7d5ea1b9cb6aa0b59ca3dde1c6adcb57ef83a1ba8e5432c0ecd06bf439b3ad88"
+)
+depends=(
+    'readline'
+)
+launcher_name='Lua'
+launcher_category='D&evelopment'
+launcher_command='/usr/local/bin/lua -i'
+launcher_run_in_terminal='true'
+icon_file="./doc/logo.gif"
+makeopts+=(
+    '-Csrc/'
+    'serenity'
+    "CC=${CC}"
+    "AR=${AR}"
+    "RANLIB=${RANLIB}"
+)
+installopts=(
+    "INSTALL_TOP=${SERENITY_INSTALL_ROOT}/usr/local"
+)

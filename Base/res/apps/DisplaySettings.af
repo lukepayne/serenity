@@ -1,8 +1,6 @@
 [App]
-Name=Display settings
+Name=Display Settings
 Executable=/bin/DisplaySettings
 Category=Settings
-
-[Icons]
-16x16=/res/icons/16x16/app-display-settings.png
-32x32=/res/icons/32x32/app-display-settings.png
+Description=Configure your display hardware, desktop wallpaper, fonts, etc.
+ExcludeFromSystemMenu=true

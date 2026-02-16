@@ -1,82 +1,84 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/InlineLinkedList.h>
-#include <Kernel/DoubleBuffer.h>
+#include <AK/IntrusiveList.h>
+#include <AK/SetOnce.h>
+#include <Kernel/Library/DoubleBuffer.h>
 #include <Kernel/Net/Socket.h>
 
 namespace Kernel {
 
-class FileDescription;
+class OpenFileDescription;
 
-class LocalSocket final : public Socket
-    , public InlineLinkedListNode<LocalSocket> {
-    friend class InlineLinkedListNode<LocalSocket>;
+struct SocketPair {
+    NonnullRefPtr<OpenFileDescription> description0;
+    NonnullRefPtr<OpenFileDescription> description1;
+};
+
+class LocalSocket final : public Socket {
 
 public:
-    static KResultOr<NonnullRefPtr<Socket>> create(int type);
+    static ErrorOr<NonnullRefPtr<LocalSocket>> try_create(int type);
+    static ErrorOr<SocketPair> try_create_connected_pair(int type);
     virtual ~LocalSocket() override;
 
-    static void for_each(Function<void(const LocalSocket&)>);
+    ErrorOr<void> sendfd(OpenFileDescription const& socket_description, NonnullRefPtr<OpenFileDescription> passing_description);
+    ErrorOr<NonnullRefPtr<OpenFileDescription>> recvfd(OpenFileDescription const& socket_description);
+    ErrorOr<void> recvfds(OpenFileDescription const& socket_description, int n, Function<ErrorOr<void>(OpenFileDescription&)> callback);
+
+    static void for_each(Function<void(LocalSocket const&)>);
+    static ErrorOr<void> try_for_each(Function<ErrorOr<void>(LocalSocket const&)>);
 
     StringView socket_path() const;
-    String absolute_path(const FileDescription& description) const override;
+    ErrorOr<NonnullOwnPtr<KString>> pseudo_path(OpenFileDescription const& description) const override;
 
     // ^Socket
-    virtual KResult bind(const sockaddr*, socklen_t) override;
-    virtual KResult connect(FileDescription&, const sockaddr*, socklen_t, ShouldBlock = ShouldBlock::Yes) override;
-    virtual KResult listen(size_t) override;
+    virtual ErrorOr<void> bind(Credentials const&, Userspace<sockaddr const*>, socklen_t) override;
+    virtual ErrorOr<void> connect(Credentials const&, OpenFileDescription&, Userspace<sockaddr const*>, socklen_t) override;
+    virtual ErrorOr<void> listen(size_t) override;
     virtual void get_local_address(sockaddr*, socklen_t*) override;
     virtual void get_peer_address(sockaddr*, socklen_t*) override;
-    virtual void attach(FileDescription&) override;
-    virtual void detach(FileDescription&) override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual ssize_t sendto(FileDescription&, const void*, size_t, int, const sockaddr*, socklen_t) override;
-    virtual ssize_t recvfrom(FileDescription&, void*, size_t, int flags, sockaddr*, socklen_t*) override;
-    virtual KResult getsockopt(FileDescription&, int level, int option, void*, socklen_t*) override;
-    virtual KResult chown(FileDescription&, uid_t, gid_t) override;
-    virtual KResult chmod(FileDescription&, mode_t) override;
+    virtual ErrorOr<void> attach(OpenFileDescription&) override;
+    virtual void detach(OpenFileDescription&) override;
+    virtual bool can_read(OpenFileDescription const&, u64) const override;
+    virtual bool can_write(OpenFileDescription const&, u64) const override;
+    virtual ErrorOr<size_t> sendto(OpenFileDescription&, UserOrKernelBuffer const&, size_t, int, Userspace<sockaddr const*>, socklen_t) override;
+    virtual ErrorOr<size_t> recvfrom(OpenFileDescription&, UserOrKernelBuffer&, size_t, int flags, Userspace<sockaddr*>, Userspace<socklen_t*>, UnixDateTime&, bool blocking) override;
+    virtual ErrorOr<void> getsockopt(OpenFileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>) override;
+    virtual ErrorOr<void> ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) override;
+    virtual ErrorOr<void> chown(Credentials const&, OpenFileDescription&, UserID, GroupID) override;
+    virtual ErrorOr<void> chmod(Credentials const&, OpenFileDescription&, mode_t) override;
 
 private:
-    explicit LocalSocket(int type);
-    virtual const char* class_name() const override { return "LocalSocket"; }
+    explicit LocalSocket(int type, NonnullOwnPtr<DoubleBuffer> client_buffer, NonnullOwnPtr<DoubleBuffer> server_buffer);
+    virtual StringView class_name() const override { return "LocalSocket"sv; }
     virtual bool is_local() const override { return true; }
-    bool has_attached_peer(const FileDescription&) const;
-    static Lockable<InlineLinkedList<LocalSocket>>& all_sockets();
-    DoubleBuffer& receive_buffer_for(FileDescription&);
-    DoubleBuffer& send_buffer_for(FileDescription&);
+    bool has_attached_peer(OpenFileDescription const&) const;
+    DoubleBuffer* receive_buffer_for(OpenFileDescription&);
+    DoubleBuffer* send_buffer_for(OpenFileDescription&);
+    Vector<NonnullRefPtr<OpenFileDescription>>& sendfd_queue_for(OpenFileDescription const&);
+    Vector<NonnullRefPtr<OpenFileDescription>>& recvfd_queue_for(OpenFileDescription const&);
 
-    // An open socket file on the filesystem.
-    RefPtr<FileDescription> m_file;
+    void set_connect_side_role(Role connect_side_role, bool force_evaluate_block_conditions = false)
+    {
+        auto previous = m_connect_side_role;
+        m_connect_side_role = connect_side_role;
+        if (previous != m_connect_side_role || force_evaluate_block_conditions)
+            evaluate_block_conditions();
+    }
 
-    uid_t m_prebind_uid { 0 };
-    gid_t m_prebind_gid { 0 };
+    ErrorOr<void> try_set_path(StringView);
+
+    // The inode this socket is bound to.
+    RefPtr<Inode> m_inode;
+
+    UserID m_prebind_uid { 0 };
+    GroupID m_prebind_gid { 0 };
     mode_t m_prebind_mode { 0 };
 
     // A single LocalSocket is shared between two file descriptions
@@ -84,25 +86,29 @@ private:
     // an additional role for the connect side and differentiate
     // between them.
     Role m_connect_side_role { Role::None };
-    FileDescription* m_connect_side_fd { nullptr };
+    OpenFileDescription* m_connect_side_fd { nullptr };
 
-    virtual Role role(const FileDescription& description) const override
+    virtual Role role(OpenFileDescription const& description) const override
     {
         if (m_connect_side_fd == &description)
             return m_connect_side_role;
         return m_role;
     }
 
-    bool m_bound { false };
+    SetOnce m_bound;
     bool m_accept_side_fd_open { false };
-    sockaddr_un m_address { 0, { 0 } };
+    OwnPtr<KString> m_path;
 
-    DoubleBuffer m_for_client;
-    DoubleBuffer m_for_server;
+    NonnullOwnPtr<DoubleBuffer> m_for_client;
+    NonnullOwnPtr<DoubleBuffer> m_for_server;
 
-    // for InlineLinkedList
-    LocalSocket* m_prev { nullptr };
-    LocalSocket* m_next { nullptr };
+    Vector<NonnullRefPtr<OpenFileDescription>> m_fds_for_client;
+    Vector<NonnullRefPtr<OpenFileDescription>> m_fds_for_server;
+
+    IntrusiveListNode<LocalSocket> m_list_node;
+
+public:
+    using List = IntrusiveList<&LocalSocket::m_list_node>;
 };
 
 }

@@ -1,180 +1,169 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/PrintfImplementation.h>
+#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/Console.h>
-#include <Kernel/IO.h>
-#include <Kernel/Process.h>
+#include <Kernel/Arch/DebugOutput.h>
+#if ARCH(X86_64)
+#    include <Kernel/Arch/x86_64/BochsDebugOutput.h>
+#endif
+#include <Kernel/Devices/BaseDevices.h>
+#include <Kernel/Devices/Device.h>
+#include <Kernel/Devices/GPU/Console/BootFramebufferConsole.h>
+#include <Kernel/Devices/GPU/Management.h>
+#include <Kernel/Devices/Generic/ConsoleDevice.h>
+#include <Kernel/Devices/Serial/16550/PCISerial16550.h>
+#include <Kernel/Devices/TTY/VirtualConsole.h>
+#include <Kernel/Locking/Spinlock.h>
 #include <Kernel/kstdio.h>
 
-#include <LibC/stdarg.h>
-
-static bool serial_debug;
-
-void set_serial_debug(bool on_or_off)
-{
-    serial_debug = on_or_off;
+namespace Kernel {
+extern Atomic<Graphics::Console*> g_boot_console;
 }
 
-int get_serial_debug()
+static bool s_serial_debug_enabled;
+static bool s_pci_serial_debug_enabled;
+// A recursive spinlock allows us to keep writing in the case where a
+// page fault happens in the middle of a dbgln(), etc
+static RecursiveSpinlock<LockRank::None> s_log_lock {};
+
+void set_serial_debug_enabled(bool desired_state)
 {
-    return serial_debug;
+    s_serial_debug_enabled = desired_state;
 }
 
-static void color_on()
+void set_pci_serial_debug_enabled(bool desired_state)
 {
-    IO::out8(0xe9, 0x1b);
-    IO::out8(0xe9, '[');
-    IO::out8(0xe9, '3');
-    IO::out8(0xe9, '6');
-    IO::out8(0xe9, 'm');
+    s_pci_serial_debug_enabled = desired_state;
 }
 
-static void color_off()
+bool is_serial_debug_enabled()
 {
-    IO::out8(0xe9, 0x1b);
-    IO::out8(0xe9, '[');
-    IO::out8(0xe9, '0');
-    IO::out8(0xe9, 'm');
+    return s_serial_debug_enabled;
+}
+
+bool is_pci_serial_debug_enabled()
+{
+    return s_pci_serial_debug_enabled;
 }
 
 static void serial_putch(char ch)
 {
-    static bool serial_ready = false;
-    static bool was_cr = false;
+    debug_output(ch);
+}
 
-    if (!serial_ready) {
-        IO::out8(0x3F8 + 1, 0x00);
-        IO::out8(0x3F8 + 3, 0x80);
-        IO::out8(0x3F8 + 0, 0x02);
-        IO::out8(0x3F8 + 1, 0x00);
-        IO::out8(0x3F8 + 3, 0x03);
-        IO::out8(0x3F8 + 2, 0xC7);
-        IO::out8(0x3F8 + 4, 0x0B);
+static void pci_serial_putch(char ch)
+{
+    if (PCISerial16550::is_available())
+        PCISerial16550::the().put_char(ch);
+}
 
-        serial_ready = true;
+static void critical_console_out(char ch)
+{
+    if (s_serial_debug_enabled)
+        serial_putch(ch);
+
+    if (s_pci_serial_debug_enabled)
+        pci_serial_putch(ch);
+
+#if ARCH(X86_64)
+    // No need to output things to the real ConsoleDevice as no one is likely
+    // to read it (because we are in a fatal situation, so only print things and halt)
+    bochs_debug_output(ch);
+#endif
+
+    // We emit chars directly to the string. this is necessary in few cases,
+    // especially when we want to avoid any memory allocations...
+    if (GraphicsManagement::is_initialized() && GraphicsManagement::the().console()) {
+        GraphicsManagement::the().console()->write(ch, true);
+    } else if (auto* boot_console = g_boot_console.load()) {
+        boot_console->write(ch, true);
     }
-
-    while ((IO::in8(0x3F8 + 5) & 0x20) == 0)
-        ;
-
-    if (ch == '\n' && !was_cr)
-        IO::out8(0x3F8, '\r');
-
-    IO::out8(0x3F8, ch);
-
-    if (ch == '\r')
-        was_cr = true;
-    else
-        was_cr = false;
 }
 
 static void console_out(char ch)
 {
-    if (serial_debug)
-        serial_putch(ch);
-
-    // It would be bad to reach the assert in Console()::the() and do a stack overflow
-
-    if (Console::is_initialized()) {
-        Console::the().put_char(ch);
+    auto base_devices = Device::base_devices();
+    if (base_devices) {
+        base_devices->console_device->put_char(ch);
     } else {
-        IO::out8(0xe9, ch);
+        if (s_serial_debug_enabled)
+            serial_putch(ch);
+
+        if (s_pci_serial_debug_enabled)
+            pci_serial_putch(ch);
+
+#if ARCH(X86_64)
+        bochs_debug_output(ch);
+#endif
+    }
+    if (!VirtualConsole::emit_char_on_debug_console(ch)) {
+        if (auto* boot_console = g_boot_console.load())
+            boot_console->write(ch, true);
     }
 }
 
-static void console_putch(char*&, char ch)
+static inline void internal_dbgputch(char ch)
 {
-    console_out(ch);
-}
-
-int kprintf(const char* fmt, ...)
-{
-    color_on();
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = printf_internal(console_putch, nullptr, fmt, ap);
-    va_end(ap);
-    color_off();
-    return ret;
-}
-
-static void buffer_putch(char*& bufptr, char ch)
-{
-    *bufptr++ = ch;
-}
-
-int sprintf(char* buffer, const char* fmt, ...)
-{
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = printf_internal(buffer_putch, buffer, fmt, ap);
-    buffer[ret] = '\0';
-    va_end(ap);
-    return ret;
-}
-
-static void debugger_out(char ch)
-{
-    if (serial_debug)
+    if (s_serial_debug_enabled)
         serial_putch(ch);
-    IO::out8(0xe9, ch);
+
+    if (s_pci_serial_debug_enabled)
+        pci_serial_putch(ch);
+
+#if ARCH(X86_64)
+    bochs_debug_output(ch);
+#endif
 }
 
-static void debugger_putch(char*&, char ch)
+extern "C" void dbgputchar(char ch)
 {
-    debugger_out(ch);
+    internal_dbgputch(ch);
 }
 
-extern "C" int dbgputstr(const char* characters, int length)
-{
-    if (!characters)
-        return 0;
-    for (int i = 0; i < length; ++i)
-        debugger_out(characters[i]);
-    return 0;
-}
-
-extern "C" int kernelputstr(const char* characters, int length)
+extern "C" void dbgputstr(char const* characters, size_t length)
 {
     if (!characters)
-        return 0;
-    for (int i = 0; i < length; ++i)
+        return;
+    SpinlockLocker lock(s_log_lock);
+    for (size_t i = 0; i < length; ++i)
+        internal_dbgputch(characters[i]);
+}
+
+void dbgputstr(StringView view)
+{
+    ::dbgputstr(view.characters_without_null_termination(), view.length());
+}
+
+extern "C" void kernelputstr(char const* characters, size_t length)
+{
+    if (!characters)
+        return;
+    SpinlockLocker lock(s_log_lock);
+    for (size_t i = 0; i < length; ++i)
         console_out(characters[i]);
-    return 0;
 }
 
-extern "C" int dbgprintf(const char* fmt, ...)
+extern "C" void kernelcriticalputstr(char const* characters, size_t length)
 {
-    color_on();
-    va_list ap;
-    va_start(ap, fmt);
-    int ret = printf_internal(debugger_putch, nullptr, fmt, ap);
-    va_end(ap);
-    color_off();
-    return ret;
+    if (!characters)
+        return;
+    SpinlockLocker lock(s_log_lock);
+    for (size_t i = 0; i < length; ++i)
+        critical_console_out(characters[i]);
+}
+
+extern "C" void kernelearlyputstr(char const* characters, size_t length)
+{
+    if (!characters)
+        return;
+    // NOTE: We do not lock the log lock here, as this function is called before this or any other processor was initialized, meaning:
+    //  A) The $gs base was not setup yet, so we cannot enter into critical sections, and as a result we cannot use SpinLocks
+    //  B) No other processors may try to print at the same time anyway
+    for (size_t i = 0; i < length; ++i)
+        internal_dbgputch(characters[i]);
 }

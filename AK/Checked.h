@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011-2019 Apple Inc. All rights reserved.
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Concepts.h>
 #include <AK/NumericLimits.h>
 #include <AK/StdLibExtras.h>
 
@@ -57,7 +58,7 @@ template<typename Destination, typename Source>
 struct TypeBoundsChecker<Destination, Source, false, false, true> {
     static constexpr bool is_within_range(Source value)
     {
-        return static_cast<MakeUnsigned<Source>>(value) <= NumericLimits<Destination>::max();
+        return value >= 0 && value <= NumericLimits<Destination>::max();
     }
 };
 
@@ -104,164 +105,318 @@ struct TypeBoundsChecker<Destination, Source, true, true, false> {
 };
 
 template<typename Destination, typename Source>
-inline constexpr bool is_within_range(Source value)
+[[nodiscard]] constexpr bool is_within_range(Source value)
 {
     return TypeBoundsChecker<Destination, Source>::is_within_range(value);
 }
 
-template<typename T>
+template<Integral T>
 class Checked {
 public:
-    Checked()
-        : m_value(0)
-    {
-    }
+    constexpr Checked() = default;
 
-    Checked(T value)
+    explicit constexpr Checked(T value)
         : m_value(value)
     {
     }
 
-    template<typename U>
-    Checked(U value)
+    template<Integral U>
+    constexpr Checked(U value)
     {
         m_overflow = !is_within_range<T>(value);
         m_value = value;
     }
 
-    Checked(const Checked& other)
-        : m_value(other.m_value)
-        , m_overflow(other.m_overflow)
-    {
-    }
+    constexpr Checked(Checked const&) = default;
 
-    Checked(Checked&& other)
+    constexpr Checked(Checked&& other)
         : m_value(exchange(other.m_value, 0))
         , m_overflow(exchange(other.m_overflow, false))
     {
     }
 
     template<typename U>
-    Checked& operator=(U value)
+    constexpr Checked& operator=(U value)
     {
-        return *this = Checked(value);
-    }
-
-    Checked& operator=(const Checked& other)
-    {
-        m_value = other.value();
-        m_overflow = other.m_overflow;
+        *this = Checked(value);
         return *this;
     }
 
-    Checked& operator=(Checked&& other)
+    constexpr Checked& operator=(Checked const& other) = default;
+
+    constexpr Checked& operator=(Checked&& other)
     {
         m_value = exchange(other.m_value, 0);
         m_overflow = exchange(other.m_overflow, false);
         return *this;
     }
 
-    bool has_overflow() const
+    [[nodiscard]] constexpr bool has_overflow() const
     {
         return m_overflow;
     }
 
-    ALWAYS_INLINE bool operator!() const
+    ALWAYS_INLINE constexpr bool operator!() const
     {
-        ASSERT(!m_overflow);
+        VERIFY(!m_overflow);
         return !m_value;
     }
 
-    ALWAYS_INLINE T value() const
+    ALWAYS_INLINE constexpr T value() const
     {
-        ASSERT(!m_overflow);
+        VERIFY(!m_overflow);
         return m_value;
     }
 
-    void add(T other)
+    ALWAYS_INLINE constexpr T value_unchecked() const
+    {
+        return m_value;
+    }
+
+    constexpr void add(T other)
     {
         m_overflow |= __builtin_add_overflow(m_value, other, &m_value);
     }
 
-    void sub(T other)
+    constexpr void sub(T other)
     {
         m_overflow |= __builtin_sub_overflow(m_value, other, &m_value);
     }
 
-    void mul(T other)
+    constexpr void mul(T other)
     {
         m_overflow |= __builtin_mul_overflow(m_value, other, &m_value);
     }
 
-    void div(T other)
+    constexpr void div(T other)
     {
+        if constexpr (IsSigned<T>) {
+            // Ensure that the resulting value won't be out of range, this can only happen when dividing by -1.
+            if (other == -1 && m_value == NumericLimits<T>::min()) {
+                m_overflow = true;
+                return;
+            }
+        }
+        if (other == 0) {
+            m_overflow = true;
+            return;
+        }
         m_value /= other;
     }
 
-    Checked& operator+=(T other)
+    constexpr void mod(T other)
+    {
+        auto initial = m_value;
+        div(other);
+        m_value *= other;
+        m_value = initial - m_value;
+    }
+
+    constexpr void saturating_sub(T other)
+    {
+        sub(other);
+        // Depending on whether other was positive or negative, we have to saturate to min or max.
+        if (m_overflow && other <= 0)
+            m_value = NumericLimits<T>::max();
+        else if (m_overflow)
+            m_value = NumericLimits<T>::min();
+        m_overflow = false;
+    }
+
+    constexpr void saturating_add(T other)
+    {
+        add(other);
+        // Depending on whether other was positive or negative, we have to saturate to max or min.
+        if (m_overflow && other >= 0)
+            m_value = NumericLimits<T>::max();
+        else if (m_overflow)
+            m_value = NumericLimits<T>::min();
+        m_overflow = false;
+    }
+
+    constexpr void saturating_mul(T other)
+    {
+        // Figure out if the result is positive, negative or zero beforehand.
+        auto either_is_zero = this->m_value == 0 || other == 0;
+        auto result_is_positive = (this->m_value > 0) == (other > 0);
+
+        mul(other);
+        if (m_overflow) {
+            if (either_is_zero)
+                m_value = 0;
+            else if (result_is_positive)
+                m_value = NumericLimits<T>::max();
+            else
+                m_value = NumericLimits<T>::min();
+        }
+        m_overflow = false;
+    }
+
+    constexpr Checked& operator+=(Checked const& other)
+    {
+        m_overflow |= other.m_overflow;
+        add(other.value());
+        return *this;
+    }
+
+    constexpr Checked& operator+=(T other)
     {
         add(other);
         return *this;
     }
 
-    Checked& operator-=(T other)
+    constexpr Checked& operator-=(Checked const& other)
+    {
+        m_overflow |= other.m_overflow;
+        sub(other.value());
+        return *this;
+    }
+
+    constexpr Checked& operator-=(T other)
     {
         sub(other);
         return *this;
     }
 
-    Checked& operator*=(T other)
+    constexpr Checked& operator*=(Checked const& other)
+    {
+        m_overflow |= other.m_overflow;
+        mul(other.value());
+        return *this;
+    }
+
+    constexpr Checked& operator*=(T other)
     {
         mul(other);
         return *this;
     }
 
-    Checked& operator/=(T other)
+    constexpr Checked& operator/=(Checked const& other)
+    {
+        m_overflow |= other.m_overflow;
+        div(other.value());
+        return *this;
+    }
+
+    constexpr Checked& operator/=(T other)
     {
         div(other);
         return *this;
     }
 
-    Checked& operator++()
+    constexpr Checked& operator%=(Checked const& other)
+    {
+        m_overflow |= other.m_overflow;
+        mod(other.value());
+        return *this;
+    }
+
+    constexpr Checked& operator%=(T other)
+    {
+        mod(other);
+        return *this;
+    }
+
+    constexpr Checked& operator++()
     {
         add(1);
         return *this;
     }
 
-    Checked& operator++(int)
+    constexpr Checked operator++(int)
     {
+        Checked old { *this };
         add(1);
+        return old;
+    }
+
+    constexpr Checked& operator--()
+    {
+        sub(1);
         return *this;
+    }
+
+    constexpr Checked operator--(int)
+    {
+        Checked old { *this };
+        sub(1);
+        return old;
     }
 
     template<typename U, typename V>
-    static bool addition_would_overflow(U u, V v)
+    [[nodiscard]] static constexpr bool addition_would_overflow(U u, V v)
     {
-#ifdef __clang__
+#if __has_builtin(__builtin_add_overflow_p)
+        return __builtin_add_overflow_p(u, v, (T)0);
+#elif __has_builtin(__builtin_add_overflow)
+        T result;
+        return __builtin_add_overflow(u, v, &result);
+#else
         Checked checked;
         checked = u;
         checked += v;
         return checked.has_overflow();
-#else
-        return __builtin_add_overflow_p(u, v, (T)0);
 #endif
     }
 
     template<typename U, typename V>
-    static bool multiplication_would_overflow(U u, V v)
+    [[nodiscard]] static constexpr bool subtraction_would_overflow(U u, V v)
     {
-#ifdef __clang__
+#if __has_builtin(__builtin_sub_overflow_p)
+        return __builtin_sub_overflow_p(u, v, (T)0);
+#elif __has_builtin(__builtin_sub_overflow)
+        T result;
+        return __builtin_sub_overflow(u, v, &result);
+#else
+        Checked checked;
+        checked = u;
+        checked -= v;
+        return checked.has_overflow();
+#endif
+    }
+
+    template<typename U, typename V>
+    static constexpr T saturating_add(U a, V b)
+    {
+        Checked checked { a };
+        checked.saturating_add(b);
+        return checked.value();
+    }
+
+    template<typename U, typename V>
+    static constexpr T saturating_sub(U a, V b)
+    {
+        Checked checked { a };
+        checked.saturating_sub(b);
+        return checked.value();
+    }
+
+    template<typename U, typename V>
+    static constexpr T saturating_mul(U a, V b)
+    {
+        Checked checked { a };
+        checked.saturating_mul(b);
+        return checked.value();
+    }
+
+    template<typename U, typename V>
+    [[nodiscard]] static constexpr bool multiplication_would_overflow(U u, V v)
+    {
+#if __has_builtin(__builtin_mul_overflow_p)
+        return __builtin_mul_overflow_p(u, v, (T)0);
+#elif __has_builtin(__builtin_mul_overflow)
+        T result;
+        return __builtin_mul_overflow(u, v, &result);
+#else
         Checked checked;
         checked = u;
         checked *= v;
         return checked.has_overflow();
-#else
-        return __builtin_mul_overflow_p(u, v, (T)0);
 #endif
     }
 
     template<typename U, typename V, typename X>
-    static bool multiplication_would_overflow(U u, V v, X x)
+    [[nodiscard]] static constexpr bool multiplication_would_overflow(U u, V v, X x)
     {
         Checked checked;
         checked = u;
@@ -271,113 +426,131 @@ public:
     }
 
 private:
-    T m_value;
+    T m_value {};
     bool m_overflow { false };
 };
 
 template<typename T>
-inline Checked<T> operator+(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator+(Checked<T> const& a, Checked<T> const& b)
 {
-    return Checked<T>(a).add(b);
+    Checked<T> c { a };
+    c.add(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator-(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator-(Checked<T> const& a, Checked<T> const& b)
 {
-    return Checked<T>(a).sub(b);
+    Checked<T> c { a };
+    c.sub(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator*(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator*(Checked<T> const& a, Checked<T> const& b)
 {
-    return Checked<T>(a).mul(b);
+    Checked<T> c { a };
+    c.mul(b.value());
+    return c;
 }
 
 template<typename T>
-inline Checked<T> operator/(const Checked<T>& a, const Checked<T>& b)
+constexpr Checked<T> operator/(Checked<T> const& a, Checked<T> const& b)
 {
-    return Checked<T>(a).div(b);
+    Checked<T> c { a };
+    c.div(b.value());
+    return c;
 }
 
 template<typename T>
-inline bool operator<(const Checked<T>& a, T b)
+constexpr Checked<T> operator%(Checked<T> const& a, Checked<T> const& b)
+{
+    Checked<T> c { a };
+    c.mod(b.value());
+    return c;
+}
+
+template<typename T>
+constexpr bool operator<(Checked<T> const& a, T b)
 {
     return a.value() < b;
 }
 
 template<typename T>
-inline bool operator>(const Checked<T>& a, T b)
+constexpr bool operator>(Checked<T> const& a, T b)
 {
     return a.value() > b;
 }
 
 template<typename T>
-inline bool operator>=(const Checked<T>& a, T b)
+constexpr bool operator>=(Checked<T> const& a, T b)
 {
     return a.value() >= b;
 }
 
 template<typename T>
-inline bool operator<=(const Checked<T>& a, T b)
+constexpr bool operator<=(Checked<T> const& a, T b)
 {
     return a.value() <= b;
 }
 
 template<typename T>
-inline bool operator==(const Checked<T>& a, T b)
+constexpr bool operator==(Checked<T> const& a, T b)
 {
     return a.value() == b;
 }
 
 template<typename T>
-inline bool operator!=(const Checked<T>& a, T b)
+constexpr bool operator!=(Checked<T> const& a, T b)
 {
     return a.value() != b;
 }
 
 template<typename T>
-inline bool operator<(T a, const Checked<T>& b)
+constexpr bool operator<(T a, Checked<T> const& b)
 {
     return a < b.value();
 }
 
 template<typename T>
-inline bool operator>(T a, const Checked<T>& b)
+constexpr bool operator>(T a, Checked<T> const& b)
 {
     return a > b.value();
 }
 
 template<typename T>
-inline bool operator>=(T a, const Checked<T>& b)
+constexpr bool operator>=(T a, Checked<T> const& b)
 {
     return a >= b.value();
 }
 
 template<typename T>
-inline bool operator<=(T a, const Checked<T>& b)
+constexpr bool operator<=(T a, Checked<T> const& b)
 {
     return a <= b.value();
 }
 
 template<typename T>
-inline bool operator==(T a, const Checked<T>& b)
+constexpr bool operator==(T a, Checked<T> const& b)
 {
     return a == b.value();
 }
 
 template<typename T>
-inline bool operator!=(T a, const Checked<T>& b)
+constexpr bool operator!=(T a, Checked<T> const& b)
 {
     return a != b.value();
 }
 
 template<typename T>
-inline Checked<T> make_checked(T value)
+constexpr Checked<T> make_checked(T value)
 {
     return Checked<T>(value);
 }
 
 }
 
+#if USING_AK_GLOBALLY
 using AK::Checked;
 using AK::make_checked;
+#endif

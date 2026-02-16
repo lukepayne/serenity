@@ -1,485 +1,400 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
+#include <AK/Checked.h>
 #include <AK/FlyString.h>
-#include <AK/Memory.h>
-#include <AK/StdLibExtras.h>
+#include <AK/Format.h>
+#include <AK/MemMem.h>
+#include <AK/Stream.h>
 #include <AK/String.h>
-#include <AK/StringBuilder.h>
-#include <AK/StringView.h>
 #include <AK/Vector.h>
-
-#ifndef KERNEL
-#    include <inttypes.h>
-#endif
-
-#ifdef KERNEL
-extern "C" char* strstr(const char* haystack, const char* needle);
-#endif
+#include <stdlib.h>
 
 namespace AK {
 
-String::String(const StringView& view)
+String String::from_utf8_with_replacement_character(StringView view, WithBOMHandling with_bom_handling)
 {
-    if (view.m_impl)
-        m_impl = *view.m_impl;
-    else
-        m_impl = StringImpl::create(view.characters_without_null_termination(), view.length());
+    if (auto bytes = view.bytes(); with_bom_handling == WithBOMHandling::Yes && bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        view = view.substring_view(3);
+
+    if (Utf8View(view).validate())
+        return String::from_utf8_without_validation(view.bytes());
+
+    StringBuilder builder;
+
+    for (auto c : Utf8View { view })
+        builder.append_code_point(c);
+
+    return builder.to_string_without_validation();
 }
 
-bool String::operator==(const FlyString& fly_string) const
+String String::from_utf8_without_validation(ReadonlyBytes bytes)
 {
-    return *this == String(fly_string.impl());
+    String result;
+    MUST(result.replace_with_new_string(bytes.size(), [&](Bytes buffer) {
+        bytes.copy_to(buffer);
+        return ErrorOr<void> {};
+    }));
+    return result;
 }
 
-bool String::operator==(const String& other) const
+ErrorOr<String> String::from_utf8(StringView view)
 {
-    if (!m_impl)
-        return !other.m_impl;
+    if (!Utf8View { view }.validate())
+        return Error::from_string_literal("String::from_utf8: Input was not valid UTF-8");
 
-    if (!other.m_impl)
-        return false;
-
-    if (length() != other.length())
-        return false;
-
-    return !memcmp(characters(), other.characters(), length());
+    String result;
+    TRY(result.replace_with_new_string(view.length(), [&](Bytes buffer) {
+        view.bytes().copy_to(buffer);
+        return ErrorOr<void> {};
+    }));
+    return result;
 }
 
-bool String::operator==(const StringView& other) const
+ErrorOr<String> String::from_stream(Stream& stream, size_t byte_count)
 {
-    if (!m_impl)
-        return !other.m_characters;
-
-    if (!other.m_characters)
-        return false;
-
-    if (length() != other.length())
-        return false;
-
-    return !memcmp(characters(), other.characters_without_null_termination(), length());
-}
-
-bool String::operator<(const String& other) const
-{
-    if (!m_impl)
-        return other.m_impl;
-
-    if (!other.m_impl)
-        return false;
-
-    return strcmp(characters(), other.characters()) < 0;
-}
-
-bool String::operator>(const String& other) const
-{
-    if (!m_impl)
-        return other.m_impl;
-
-    if (!other.m_impl)
-        return false;
-
-    return strcmp(characters(), other.characters()) > 0;
-}
-
-String String::empty()
-{
-    return StringImpl::the_empty_stringimpl();
-}
-
-String String::isolated_copy() const
-{
-    if (!m_impl)
+    String result;
+    TRY(result.replace_with_new_string(byte_count, [&](Bytes buffer) -> ErrorOr<void> {
+        TRY(stream.read_until_filled(buffer));
+        if (!Utf8View { StringView { buffer } }.validate())
+            return Error::from_string_literal("String::from_stream: Input was not valid UTF-8");
         return {};
-    if (!m_impl->length())
-        return empty();
-    char* buffer;
-    auto impl = StringImpl::create_uninitialized(length(), buffer);
-    memcpy(buffer, m_impl->characters(), m_impl->length());
-    return String(move(*impl));
+    }));
+    return result;
 }
 
-String String::substring(size_t start, size_t length) const
+ErrorOr<String> String::repeated(u32 code_point, size_t count)
 {
-    if (!length)
-        return {};
-    ASSERT(m_impl);
-    ASSERT(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
-    return { characters() + start, length };
-}
+    VERIFY(is_unicode(code_point));
 
-StringView String::substring_view(size_t start, size_t length) const
-{
-    ASSERT(m_impl);
-    ASSERT(start + length <= m_impl->length());
-    // FIXME: This needs some input bounds checking.
-    return { characters() + start, length };
-}
+    Array<u8, 4> code_point_as_utf8;
+    size_t i = 0;
 
-Vector<String> String::split(char separator, bool keep_empty) const
-{
-    return split_limit(separator, 0, keep_empty);
-}
+    size_t code_point_byte_length = UnicodeUtils::code_point_to_utf8(code_point, [&](auto byte) {
+        code_point_as_utf8[i++] = static_cast<u8>(byte);
+    });
 
-Vector<String> String::split_limit(char separator, size_t limit, bool keep_empty) const
-{
-    if (is_empty())
-        return {};
+    auto total_byte_count = code_point_byte_length * count;
 
-    Vector<String> v;
-    size_t substart = 0;
-    for (size_t i = 0; i < length() && (v.size() + 1) != limit; ++i) {
-        char ch = characters()[i];
-        if (ch == separator) {
-            size_t sublen = i - substart;
-            if (sublen != 0 || keep_empty)
-                v.append(substring(substart, sublen));
-            substart = i + 1;
+    String result;
+    TRY(result.replace_with_new_string(total_byte_count, [&](Bytes buffer) {
+        if (code_point_byte_length == 1) {
+            buffer.fill(code_point_as_utf8[0]);
+        } else {
+            for (i = 0; i < count; ++i)
+                memcpy(buffer.data() + (i * code_point_byte_length), code_point_as_utf8.data(), code_point_byte_length);
         }
-    }
-    size_t taillen = length() - substart;
-    if (taillen != 0 || keep_empty)
-        v.append(substring(substart, taillen));
-    return v;
+        return ErrorOr<void> {};
+    }));
+    return result;
 }
 
-Vector<StringView> String::split_view(const char separator, bool keep_empty) const
+StringView String::bytes_as_string_view() const&
 {
-    if (is_empty())
-        return {};
-
-    Vector<StringView> v;
-    size_t substart = 0;
-    for (size_t i = 0; i < length(); ++i) {
-        char ch = characters()[i];
-        if (ch == separator) {
-            size_t sublen = i - substart;
-            if (sublen != 0 || keep_empty)
-                v.append(substring_view(substart, sublen));
-            substart = i + 1;
-        }
-    }
-    size_t taillen = length() - substart;
-    if (taillen != 0 || keep_empty)
-        v.append(substring_view(substart, taillen));
-    return v;
+    return StringView(bytes());
 }
 
-ByteBuffer String::to_byte_buffer() const
+bool String::is_empty() const
 {
-    if (!m_impl)
-        return nullptr;
-    return ByteBuffer::copy(reinterpret_cast<const u8*>(characters()), length());
+    return bytes().size() == 0;
 }
 
-int String::to_int(bool& ok) const
-{
-    return StringUtils::convert_to_int(this->view(), ok);
-}
-
-unsigned String::to_uint(bool& ok) const
-{
-    return StringUtils::convert_to_uint(this->view(), ok);
-}
-
-String String::number(unsigned long long value)
-{
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%llu", value);
-    return String(buffer, size);
-}
-
-String String::number(unsigned long value)
-{
-    int size;
-    char buffer[32];
-    size = sprintf(buffer, "%lu", value);
-    return String(buffer, size);
-}
-
-String String::number(unsigned value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%u", value);
-    return String(buffer, size);
-}
-
-String String::number(long long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%lld", value);
-    return String(buffer, size);
-}
-
-String String::number(long value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%ld", value);
-    return String(buffer, size);
-}
-
-String String::number(int value)
-{
-    char buffer[32];
-    int size = sprintf(buffer, "%d", value);
-    return String(buffer, size);
-}
-
-String String::format(const char* fmt, ...)
+ErrorOr<String> String::vformatted(StringView fmtstr, TypeErasedFormatParams& params)
 {
     StringBuilder builder;
-    va_list ap;
-    va_start(ap, fmt);
-    builder.appendvf(fmt, ap);
-    va_end(ap);
+    TRY(vformat(builder, fmtstr, params));
     return builder.to_string();
 }
 
-bool String::starts_with(const StringView& str) const
+ErrorOr<Vector<String>> String::split(u32 separator, SplitBehavior split_behavior) const
 {
-    if (str.is_empty())
-        return true;
+    return split_limit(separator, 0, split_behavior);
+}
+
+ErrorOr<Vector<String>> String::split_limit(u32 separator, size_t limit, SplitBehavior split_behavior) const
+{
+    Vector<String> result;
+
     if (is_empty())
-        return false;
-    if (str.length() > length())
-        return false;
-    return !memcmp(characters(), str.characters_without_null_termination(), str.length());
-}
+        return result;
 
-bool String::starts_with(char ch) const
-{
-    if (is_empty())
-        return false;
-    return characters()[0] == ch;
-}
-
-bool String::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
-{
-    return StringUtils::ends_with(*this, str, case_sensitivity);
-}
-
-bool String::ends_with(char ch) const
-{
-    if (is_empty())
-        return false;
-    return characters()[length() - 1] == ch;
-}
-String String::repeated(char ch, size_t count)
-{
-    if (!count)
-        return empty();
-    char* buffer;
-    auto impl = StringImpl::create_uninitialized(count, buffer);
-    memset(buffer, ch, count);
-    return *impl;
-}
-
-bool String::matches(const StringView& mask, CaseSensitivity case_sensitivity) const
-{
-    return StringUtils::matches(*this, mask, case_sensitivity);
-}
-
-bool String::contains(const String& needle) const
-{
-    if (is_null() || needle.is_null())
-        return false;
-    return strstr(characters(), needle.characters());
-}
-
-Optional<size_t> String::index_of(const String& needle) const
-{
-    if (is_null() || needle.is_null())
-        return {};
-
-    const char* self_characters = characters();
-    const char* result = strstr(self_characters, needle.characters());
-    if (!result)
-        return {};
-    return Optional<size_t> { result - self_characters };
-}
-
-bool String::equals_ignoring_case(const StringView& other) const
-{
-    return StringUtils::equals_ignoring_case(view(), other);
-}
-
-int String::replace(const String& needle, const String& replacement, bool all_occurences)
-{
-    if (is_empty())
-        return 0;
-
-    Vector<size_t> positions;
-    size_t start = 0, pos;
-    for (;;) {
-        const char* ptr = strstr(characters() + start, needle.characters());
-        if (!ptr)
-            break;
-
-        pos = ptr - characters();
-        positions.append(pos);
-        if (!all_occurences)
-            break;
-
-        start = pos + 1;
-    }
-
-    if (!positions.size())
-        return 0;
-
-    StringBuilder b;
-    size_t lastpos = 0;
-    for (auto& pos : positions) {
-        b.append(substring_view(lastpos, pos - lastpos));
-        b.append(replacement);
-        lastpos = pos + needle.length();
-    }
-    b.append(substring_view(lastpos, length() - lastpos));
-    m_impl = StringImpl::create(b.build().characters());
-    return positions.size();
-}
-
-String String::trim_whitespace(TrimMode mode) const
-{
-    auto is_whitespace_character = [](char ch) -> bool {
-        return ch == '\t'
-            || ch == '\n'
-            || ch == '\v'
-            || ch == '\f'
-            || ch == '\r'
-            || ch == ' ';
-    };
+    bool keep_empty = has_flag(split_behavior, SplitBehavior::KeepEmpty);
 
     size_t substring_start = 0;
-    size_t substring_length = length();
-
-    if (mode == TrimMode::Left || mode == TrimMode::Both) {
-        for (size_t i = 0; i < length(); ++i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            ++substring_start;
-            --substring_length;
+    for (auto it = code_points().begin(); it != code_points().end() && (result.size() + 1) != limit; ++it) {
+        u32 code_point = *it;
+        if (code_point == separator) {
+            size_t substring_length = code_points().iterator_offset(it) - substring_start;
+            if (substring_length != 0 || keep_empty)
+                TRY(result.try_append(TRY(substring_from_byte_offset_with_shared_superstring(substring_start, substring_length))));
+            substring_start = code_points().iterator_offset(it) + it.underlying_code_point_length_in_bytes();
         }
     }
-
-    if (mode == TrimMode::Right || mode == TrimMode::Both) {
-        for (size_t i = length() - 1; i > 0; --i) {
-            if (substring_length == 0)
-                return "";
-            if (!is_whitespace_character(characters()[i]))
-                break;
-            --substring_length;
-        }
-    }
-
-    return substring(substring_start, substring_length);
+    size_t tail_length = code_points().byte_length() - substring_start;
+    if (tail_length != 0 || keep_empty)
+        TRY(result.try_append(TRY(substring_from_byte_offset_with_shared_superstring(substring_start, tail_length))));
+    return result;
 }
 
-String escape_html_entities(const StringView& html)
+Optional<size_t> String::find_byte_offset(u32 code_point, size_t from_byte_offset) const
 {
-    StringBuilder builder;
-    for (size_t i = 0; i < html.length(); ++i) {
-        if (html[i] == '<')
-            builder.append("&lt;");
-        else if (html[i] == '>')
-            builder.append("&gt;");
-        else if (html[i] == '&')
-            builder.append("&amp;");
-        else
-            builder.append(html[i]);
+    auto code_points = this->code_points();
+    if (from_byte_offset >= code_points.byte_length())
+        return {};
+
+    for (auto it = code_points.iterator_at_byte_offset(from_byte_offset); it != code_points.end(); ++it) {
+        if (*it == code_point)
+            return code_points.byte_offset_of(it);
     }
+
+    return {};
+}
+
+Optional<size_t> String::find_byte_offset(StringView substring, size_t from_byte_offset) const
+{
+    auto view = bytes_as_string_view();
+    if (from_byte_offset >= view.length())
+        return {};
+
+    auto index = memmem_optional(
+        view.characters_without_null_termination() + from_byte_offset, view.length() - from_byte_offset,
+        substring.characters_without_null_termination(), substring.length());
+
+    if (index.has_value())
+        return *index + from_byte_offset;
+    return {};
+}
+
+bool String::operator==(FlyString const& other) const
+{
+    return static_cast<StringBase const&>(*this) == other.data({});
+}
+
+bool String::operator==(StringView other) const
+{
+    return bytes_as_string_view() == other;
+}
+
+ErrorOr<String> String::substring_from_byte_offset(size_t start, size_t byte_count) const
+{
+    if (!byte_count)
+        return String {};
+    return String::from_utf8(bytes_as_string_view().substring_view(start, byte_count));
+}
+
+ErrorOr<String> String::substring_from_byte_offset(size_t start) const
+{
+    VERIFY(start <= bytes_as_string_view().length());
+    return substring_from_byte_offset(start, bytes_as_string_view().length() - start);
+}
+
+ErrorOr<String> String::substring_from_byte_offset_with_shared_superstring(size_t start, size_t byte_count) const
+{
+    return String { TRY(StringBase::substring_from_byte_offset_with_shared_superstring(start, byte_count)) };
+}
+
+ErrorOr<String> String::substring_from_byte_offset_with_shared_superstring(size_t start) const
+{
+    VERIFY(start <= bytes_as_string_view().length());
+    return substring_from_byte_offset_with_shared_superstring(start, bytes_as_string_view().length() - start);
+}
+
+bool String::operator==(char const* c_string) const
+{
+    return bytes_as_string_view() == c_string;
+}
+
+u32 String::ascii_case_insensitive_hash() const
+{
+    return case_insensitive_string_hash(reinterpret_cast<char const*>(bytes().data()), bytes().size());
+}
+
+Utf8View String::code_points() const&
+{
+    return Utf8View(bytes_as_string_view());
+}
+
+ErrorOr<void> Formatter<String>::format(FormatBuilder& builder, String const& utf8_string)
+{
+    return Formatter<StringView>::format(builder, utf8_string.bytes_as_string_view());
+}
+
+ErrorOr<String> String::replace(StringView needle, StringView replacement, ReplaceMode replace_mode) const
+{
+    return StringUtils::replace(*this, needle, replacement, replace_mode);
+}
+
+ErrorOr<String> String::reverse() const
+{
+    // FIXME: This handles multi-byte code points, but not e.g. grapheme clusters.
+    // FIXME: We could avoid allocating a temporary vector if Utf8View supports reverse iteration.
+    auto code_point_length = code_points().length();
+
+    Vector<u32> code_points;
+    TRY(code_points.try_ensure_capacity(code_point_length));
+
+    for (auto code_point : this->code_points())
+        code_points.unchecked_append(code_point);
+
+    auto builder = TRY(StringBuilder::create(code_point_length * sizeof(u32)));
+    while (!code_points.is_empty())
+        TRY(builder.try_append_code_point(code_points.take_last()));
+
     return builder.to_string();
 }
 
-String::String(const FlyString& string)
-    : m_impl(string.impl())
+ErrorOr<String> String::trim(Utf8View const& code_points_to_trim, TrimMode mode) const
 {
+    auto trimmed = code_points().trim(code_points_to_trim, mode);
+    return String::from_utf8(trimmed.as_string());
 }
 
-String String::to_lowercase() const
+ErrorOr<String> String::trim(StringView code_points_to_trim, TrimMode mode) const
 {
-    if (!m_impl)
-        return {};
-    return m_impl->to_lowercase();
+    return trim(Utf8View { code_points_to_trim }, mode);
 }
 
-String String::to_uppercase() const
+ErrorOr<String> String::trim_ascii_whitespace(TrimMode mode) const
 {
-    if (!m_impl)
-        return {};
-    return m_impl->to_uppercase();
+    return trim(" \n\t\v\f\r"sv, mode);
 }
 
-bool operator<(const char* characters, const String& string)
+bool String::contains(StringView needle, CaseSensitivity case_sensitivity) const
 {
-    if (!characters)
-        return !string.is_null();
+    return StringUtils::contains(bytes_as_string_view(), needle, case_sensitivity);
+}
 
-    if (string.is_null())
+bool String::contains(u32 needle, CaseSensitivity case_sensitivity) const
+{
+    auto needle_as_string = String::from_code_point(needle);
+    return contains(needle_as_string.bytes_as_string_view(), case_sensitivity);
+}
+
+bool String::starts_with(u32 code_point) const
+{
+    if (is_empty())
         return false;
 
-    return __builtin_strcmp(characters, string.characters()) < 0;
+    return *code_points().begin() == code_point;
 }
 
-bool operator>=(const char* characters, const String& string)
+bool String::starts_with_bytes(StringView bytes, CaseSensitivity case_sensitivity) const
 {
-    return !(characters < string);
+    return bytes_as_string_view().starts_with(bytes, case_sensitivity);
 }
 
-bool operator>(const char* characters, const String& string)
+bool String::ends_with(u32 code_point) const
 {
-    if (!characters)
-        return !string.is_null();
-
-    if (string.is_null())
+    if (is_empty())
         return false;
 
-    return __builtin_strcmp(characters, string.characters()) > 0;
+    u32 last_code_point = 0;
+    for (auto it = code_points().begin(); it != code_points().end(); ++it)
+        last_code_point = *it;
+
+    return last_code_point == code_point;
 }
 
-bool operator<=(const char* characters, const String& string)
+bool String::ends_with_bytes(StringView bytes, CaseSensitivity case_sensitivity) const
 {
-    return !(characters > string);
+    return bytes_as_string_view().ends_with(bytes, case_sensitivity);
 }
 
-bool String::operator==(const char* cstring) const
+unsigned Traits<String>::hash(String const& string)
 {
-    if (is_null())
-        return !cstring;
-    if (!cstring)
+    return string.hash();
+}
+
+ByteString String::to_byte_string() const
+{
+    return ByteString(bytes_as_string_view());
+}
+
+ErrorOr<String> String::from_byte_string(ByteString const& byte_string)
+{
+    return String::from_utf8(byte_string.view());
+}
+
+String String::to_ascii_lowercase() const
+{
+    bool const has_ascii_uppercase = [&] {
+        for (u8 const byte : bytes()) {
+            if (AK::is_ascii_upper_alpha(byte))
+                return true;
+        }
         return false;
-    return !__builtin_strcmp(characters(), cstring);
+    }();
+
+    if (!has_ascii_uppercase)
+        return *this;
+
+    Vector<u8> lowercase_bytes;
+    lowercase_bytes.ensure_capacity(bytes().size());
+    for (u8 const byte : bytes()) {
+        if (AK::is_ascii_upper_alpha(byte))
+            lowercase_bytes.unchecked_append(AK::to_ascii_lowercase(byte));
+        else
+            lowercase_bytes.unchecked_append(byte);
+    }
+    return String::from_utf8_without_validation(lowercase_bytes);
 }
 
-StringView String::view() const
+String String::to_ascii_uppercase() const
 {
-    return { characters(), length() };
+    bool const has_ascii_lowercase = [&] {
+        for (u8 const byte : bytes()) {
+            if (AK::is_ascii_lower_alpha(byte))
+                return true;
+        }
+        return false;
+    }();
+
+    if (!has_ascii_lowercase)
+        return *this;
+
+    Vector<u8> uppercase_bytes;
+    uppercase_bytes.ensure_capacity(bytes().size());
+    for (u8 const byte : bytes()) {
+        if (AK::is_ascii_lower_alpha(byte))
+            uppercase_bytes.unchecked_append(AK::to_ascii_uppercase(byte));
+        else
+            uppercase_bytes.unchecked_append(byte);
+    }
+    return String::from_utf8_without_validation(uppercase_bytes);
+}
+
+bool String::equals_ignoring_ascii_case(String const& other) const
+{
+    return StringUtils::equals_ignoring_ascii_case(bytes_as_string_view(), other.bytes_as_string_view());
+}
+
+bool String::equals_ignoring_ascii_case(StringView other) const
+{
+    return StringUtils::equals_ignoring_ascii_case(bytes_as_string_view(), other);
+}
+
+ErrorOr<String> String::repeated(String const& input, size_t count)
+{
+    if (Checked<u32>::multiplication_would_overflow(count, input.bytes().size()))
+        return Error::from_errno(EOVERFLOW);
+
+    String result;
+    size_t input_size = input.bytes().size();
+    TRY(result.replace_with_new_string(count * input_size, [&](Bytes buffer) {
+        if (input_size == 1) {
+            buffer.fill(input.bytes().first());
+        } else {
+            for (size_t i = 0; i < count; ++i)
+                input.bytes().copy_to(buffer.slice(i * input_size, input_size));
+        }
+        return ErrorOr<void> {};
+    }));
+
+    return result;
 }
 
 }

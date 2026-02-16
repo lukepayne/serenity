@@ -1,134 +1,97 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/Assertions.h>
-#include <AK/LogStream.h>
+#include <AK/Format.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Types.h>
 #include <stdarg.h>
 
-static constexpr const char* printf_hex_digits_lower = "0123456789abcdef";
-static constexpr const char* printf_hex_digits_upper = "0123456789ABCDEF";
+#ifndef KERNEL
+#    include <math.h>
+#    include <wchar.h>
+#endif
 
-#ifdef __serenity__
-extern "C" size_t strlen(const char*);
+#ifdef AK_OS_SERENITY
+extern "C" size_t strlen(char const*);
 #else
 #    include <string.h>
 #endif
 
-template<typename PutChFunc, typename T>
-ALWAYS_INLINE int print_hex(PutChFunc putch, char*& bufptr, T number, bool upper_case, bool alternate_form, bool left_pad, bool zero_pad, u8 field_width)
-{
-    int ret = 0;
+namespace PrintfImplementation {
 
-    int digits = 0;
+template<typename PutChFunc, typename T, typename CharType>
+ALWAYS_INLINE int print_hex(PutChFunc putch, CharType*& bufptr, T number, bool upper_case, bool alternate_form, bool left_pad, bool zero_pad, u32 field_width, bool has_precision, u32 precision)
+{
+    constexpr char const* printf_hex_digits_lower = "0123456789abcdef";
+    constexpr char const* printf_hex_digits_upper = "0123456789ABCDEF";
+
+    u32 digits = 0;
     for (T n = number; n > 0; n >>= 4)
         ++digits;
     if (digits == 0)
         digits = 1;
 
-    if (left_pad) {
-        int stop_at = field_width - digits;
-        if (alternate_form)
-            stop_at -= 2;
+    bool not_zero = number != 0;
 
-        while (ret < stop_at) {
-            putch(bufptr, ' ');
-            ++ret;
-        }
-    }
-
-    if (alternate_form) {
-        putch(bufptr, '0');
-        putch(bufptr, 'x');
-        ret += 2;
-        field_width += 2;
-    }
-
-    if (zero_pad) {
-        while (ret < field_width - digits) {
-            putch(bufptr, '0');
-            ++ret;
-        }
-    }
-
-    if (number == 0) {
-        putch(bufptr, '0');
-        ++ret;
-    } else {
-        u8 shift_count = digits * 4;
-        while (shift_count) {
-            shift_count -= 4;
-            putch(bufptr,
-                upper_case
-                    ? printf_hex_digits_upper[(number >> shift_count) & 0x0f]
-                    : printf_hex_digits_lower[(number >> shift_count) & 0x0f]);
-            ++ret;
-        }
-    }
-
-    return ret;
-}
-
-template<typename PutChFunc>
-ALWAYS_INLINE int print_number(PutChFunc putch, char*& bufptr, u32 number, bool left_pad, bool zero_pad, u32 field_width)
-{
-    u32 divisor = 1000000000;
-    char ch;
-    char padding = 1;
     char buf[16];
     char* p = buf;
 
-    for (;;) {
-        ch = '0' + (number / divisor);
-        number %= divisor;
-        if (ch != '0')
-            padding = 0;
-        if (!padding || divisor == 1)
-            *(p++) = ch;
-        if (divisor == 1)
-            break;
-        divisor /= 10;
+    if (!(has_precision && precision == 0 && !not_zero)) {
+        if (number == 0) {
+            (*p++) = '0';
+            if (precision > 0)
+                precision--;
+        } else {
+            u8 shift_count = digits * 4;
+            while (shift_count) {
+                shift_count -= 4;
+                (*p++) = upper_case
+                    ? printf_hex_digits_upper[(number >> shift_count) & 0x0f]
+                    : printf_hex_digits_lower[(number >> shift_count) & 0x0f];
+                if (precision > 0)
+                    precision--;
+            }
+        }
     }
 
     size_t numlen = p - buf;
-    if (!field_width || field_width < numlen)
-        field_width = numlen;
+
+    if (!field_width || field_width < (numlen + has_precision * precision + (alternate_form * 2 * not_zero)))
+        field_width = numlen + has_precision * precision + alternate_form * 2 * not_zero;
+
+    if ((zero_pad && !has_precision) && (alternate_form && not_zero)) {
+        putch(bufptr, '0');
+        putch(bufptr, 'x');
+    }
+
     if (!left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
-            putch(bufptr, zero_pad ? '0' : ' ');
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision - alternate_form * 2 * not_zero; ++i) {
+            putch(bufptr, (zero_pad && !has_precision) ? '0' : ' ');
         }
     }
+
+    if (!(zero_pad && !has_precision) && (alternate_form && not_zero)) {
+        putch(bufptr, '0');
+        putch(bufptr, 'x');
+    }
+
+    if (has_precision) {
+        for (u32 i = 0; i < precision; ++i) {
+            putch(bufptr, '0');
+        }
+    }
+
     for (unsigned i = 0; i < numlen; ++i) {
         putch(bufptr, buf[i]);
     }
+
     if (left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision - alternate_form * 2 * not_zero; ++i) {
             putch(bufptr, ' ');
         }
     }
@@ -136,81 +99,130 @@ ALWAYS_INLINE int print_number(PutChFunc putch, char*& bufptr, u32 number, bool 
     return field_width;
 }
 
-template<typename PutChFunc>
-ALWAYS_INLINE int print_u64(PutChFunc putch, char*& bufptr, u64 number, bool left_pad, bool zero_pad, u32 field_width)
+template<typename PutChFunc, typename CharType>
+ALWAYS_INLINE int print_decimal(PutChFunc putch, CharType*& bufptr, u64 number, bool sign, bool always_sign, bool left_pad, bool zero_pad, u32 field_width, bool has_precision, u32 precision)
 {
     u64 divisor = 10000000000000000000LLU;
     char ch;
     char padding = 1;
-    char buf[16];
+    char buf[21];
     char* p = buf;
 
-    for (;;) {
-        ch = '0' + (number / divisor);
-        number %= divisor;
-        if (ch != '0')
-            padding = 0;
-        if (!padding || divisor == 1)
-            *(p++) = ch;
-        if (divisor == 1)
-            break;
-        divisor /= 10;
+    if (!(has_precision && precision == 0 && number == 0)) {
+        for (;;) {
+            ch = '0' + (number / divisor);
+            number %= divisor;
+            if (ch != '0')
+                padding = 0;
+            if (!padding || divisor == 1) {
+                *(p++) = ch;
+                if (precision > 0)
+                    precision--;
+            }
+            if (divisor == 1)
+                break;
+            divisor /= 10;
+        }
     }
 
     size_t numlen = p - buf;
-    if (!field_width || field_width < numlen)
-        field_width = numlen;
+
+    if (!field_width || field_width < (numlen + has_precision * precision + (sign || always_sign)))
+        field_width = numlen + has_precision * precision + (sign || always_sign);
+
+    if ((zero_pad && !has_precision) && (sign || always_sign)) {
+        putch(bufptr, sign ? '-' : '+');
+    }
+
     if (!left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
-            putch(bufptr, zero_pad ? '0' : ' ');
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision - (sign || always_sign); ++i) {
+            putch(bufptr, (zero_pad && !has_precision) ? '0' : ' ');
         }
     }
+
+    if (!(zero_pad && !has_precision) && (sign || always_sign)) {
+        putch(bufptr, sign ? '-' : '+');
+    }
+
+    if (has_precision) {
+        for (u32 i = 0; i < precision; ++i) {
+            putch(bufptr, '0');
+        }
+    }
+
     for (unsigned i = 0; i < numlen; ++i) {
         putch(bufptr, buf[i]);
     }
+
     if (left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision - (sign || always_sign); ++i) {
             putch(bufptr, ' ');
         }
     }
 
     return field_width;
 }
-
-template<typename PutChFunc>
-ALWAYS_INLINE int print_double(PutChFunc putch, char*& bufptr, double number, bool left_pad, bool zero_pad, u32 field_width, u32 fraction_length = 6)
+#ifndef KERNEL
+template<typename PutChFunc, typename CharType>
+ALWAYS_INLINE int print_double(PutChFunc putch, CharType*& bufptr, double number, bool always_sign, bool left_pad, bool zero_pad, u32 field_width, u32 precision, bool trailing_zeros)
 {
     int length = 0;
 
-    if (number < 0) {
-        putch(bufptr, '-');
-        length++;
-        number = 0 - number;
+    u32 whole_width = (field_width >= precision + 1) ? field_width - precision - 1 : 0;
+
+    bool sign = signbit(number);
+    bool nan = isnan(number);
+    bool inf = isinf(number);
+
+    if (nan || inf) {
+        for (unsigned i = 0; i < field_width - 3 - sign; i++) {
+            putch(bufptr, ' ');
+            length++;
+        }
+        if (sign) {
+            putch(bufptr, '-');
+            length++;
+        }
+        if (nan) {
+            putch(bufptr, 'n');
+            putch(bufptr, 'a');
+            putch(bufptr, 'n');
+        } else {
+            putch(bufptr, 'i');
+            putch(bufptr, 'n');
+            putch(bufptr, 'f');
+        }
+        return length + 3;
     }
 
-    length = print_u64(putch, bufptr, (i64)number, left_pad, zero_pad, field_width);
-    putch(bufptr, '.');
-    length++;
-    double fraction = number - (i64)number;
+    if (sign)
+        number = -number;
 
-    for (u32 i = 0; i < fraction_length; ++i)
-        fraction = fraction * 10;
+    length = print_decimal(putch, bufptr, (i64)number, sign, always_sign, left_pad, zero_pad, whole_width, false, 1);
+    if (precision > 0) {
+        double fraction = number - (i64)number;
 
-    return length + print_u64(putch, bufptr, (i64)fraction, false, true, fraction_length);
-}
+        for (u32 i = 0; i < precision; ++i)
+            fraction = fraction * 10;
+        if (trailing_zeros || fraction) {
+            length++;
+            putch(bufptr, '.');
 
-template<typename PutChFunc>
-ALWAYS_INLINE int print_i64(PutChFunc putch, char*& bufptr, i64 number, bool left_pad, bool zero_pad, u32 field_width)
-{
-    if (number < 0) {
-        putch(bufptr, '-');
-        return print_u64(putch, bufptr, 0 - number, left_pad, zero_pad, field_width) + 1;
+            i64 ifraction = fraction;
+            while (!trailing_zeros && ifraction % 10 == 0) {
+                ifraction /= 10;
+                precision--;
+            }
+
+            return length + print_decimal(putch, bufptr, ifraction, false, false, false, true, precision, false, 1);
+        }
     }
-    return print_u64(putch, bufptr, number, left_pad, zero_pad, field_width);
-}
 
-template<typename PutChFunc>
-ALWAYS_INLINE int print_octal_number(PutChFunc putch, char*& bufptr, u32 number, bool left_pad, bool zero_pad, u32 field_width)
+    return length;
+}
+#endif
+template<typename PutChFunc, typename CharType>
+ALWAYS_INLINE int print_octal_number(PutChFunc putch, CharType*& bufptr, u64 number, bool alternate_form, bool left_pad, bool zero_pad, u32 field_width, bool has_precision, u32 precision)
 {
     u32 divisor = 134217728;
     char ch;
@@ -218,31 +230,52 @@ ALWAYS_INLINE int print_octal_number(PutChFunc putch, char*& bufptr, u32 number,
     char buf[32];
     char* p = buf;
 
-    for (;;) {
-        ch = '0' + (number / divisor);
-        number %= divisor;
-        if (ch != '0')
-            padding = 0;
-        if (!padding || divisor == 1)
-            *(p++) = ch;
-        if (divisor == 1)
-            break;
-        divisor /= 8;
+    if (alternate_form) {
+        (*p++) = '0';
+        if (precision > 0)
+            precision--;
+    }
+
+    if (!(has_precision && precision == 0 && number == 0)) {
+        for (;;) {
+            ch = '0' + (number / divisor);
+            number %= divisor;
+            if (ch != '0')
+                padding = 0;
+            if (!padding || divisor == 1) {
+                *(p++) = ch;
+                if (precision > 0)
+                    precision--;
+            }
+            if (divisor == 1)
+                break;
+            divisor /= 8;
+        }
     }
 
     size_t numlen = p - buf;
-    if (!field_width || field_width < numlen)
-        field_width = numlen;
+
+    if (!field_width || field_width < (numlen + has_precision * precision))
+        field_width = numlen + has_precision * precision;
+
     if (!left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
-            putch(bufptr, zero_pad ? '0' : ' ');
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision; ++i) {
+            putch(bufptr, (zero_pad && !has_precision) ? '0' : ' ');
         }
     }
+
+    if (has_precision) {
+        for (u32 i = 0; i < precision; ++i) {
+            putch(bufptr, '0');
+        }
+    }
+
     for (unsigned i = 0; i < numlen; ++i) {
         putch(bufptr, buf[i]);
     }
+
     if (left_pad) {
-        for (unsigned i = 0; i < field_width - numlen; ++i) {
+        for (unsigned i = 0; i < field_width - numlen - has_precision * precision; ++i) {
             putch(bufptr, ' ');
         }
     }
@@ -250,11 +283,18 @@ ALWAYS_INLINE int print_octal_number(PutChFunc putch, char*& bufptr, u32 number,
     return field_width;
 }
 
-template<typename PutChFunc>
-ALWAYS_INLINE int print_string(PutChFunc putch, char*& bufptr, const char* str, size_t len, bool left_pad, size_t field_width, bool dot)
+template<typename PutChFunc, typename T, typename CharType>
+ALWAYS_INLINE int print_string(PutChFunc putch, CharType*& bufptr, T str, size_t len, bool left_pad, size_t field_width, bool dot, size_t precision, bool has_fraction)
 {
+    if (has_fraction)
+        len = min(len, precision);
+
     if (!dot && (!field_width || field_width < len))
         field_width = len;
+
+    if (has_fraction && !field_width)
+        field_width = len;
+
     size_t pad_amount = field_width > len ? field_width - len : 0;
 
     if (!left_pad) {
@@ -271,173 +311,302 @@ ALWAYS_INLINE int print_string(PutChFunc putch, char*& bufptr, const char* str, 
     return field_width;
 }
 
-template<typename PutChFunc>
-ALWAYS_INLINE int print_signed_number(PutChFunc putch, char*& bufptr, int number, bool left_pad, bool zero_pad, u32 field_width, bool always_sign)
+template<typename PutChFunc, typename CharType>
+ALWAYS_INLINE int print_signed_number(PutChFunc putch, CharType*& bufptr, i64 number, bool always_sign, bool left_pad, bool zero_pad, u32 field_width, bool has_precision, u32 precision)
 {
-    if (number < 0) {
-        putch(bufptr, '-');
-        return print_number(putch, bufptr, 0 - number, left_pad, zero_pad, field_width) + 1;
-    }
-    if (always_sign)
-        putch(bufptr, '+');
-    return print_number(putch, bufptr, number, left_pad, zero_pad, field_width);
+    // FIXME: `0 - number` overflows if we are trying to negate the smallest possible value.
+    return print_decimal(putch, bufptr, (number < 0) ? 0 - number : number, number < 0, always_sign, left_pad, zero_pad, field_width, has_precision, precision);
 }
 
-template<typename PutChFunc>
-ALWAYS_INLINE int printf_internal(PutChFunc putch, char* buffer, const char*& fmt, va_list ap)
+struct ModifierState {
+    bool left_pad { false };
+    bool zero_pad { false };
+    bool dot { false };
+    unsigned field_width { 0 };
+    bool has_precision { false };
+    unsigned precision { 6 };
+    unsigned short_qualifiers { 0 }; // TODO: Unimplemented.
+    unsigned long_qualifiers { 0 };
+    bool intmax_qualifier { false };      // TODO: Unimplemented.
+    bool ptrdiff_qualifier { false };     // TODO: Unimplemented.
+    bool long_double_qualifier { false }; // TODO: Unimplemented.
+    bool size_qualifier { false };        // TODO: Unimplemented.
+    bool alternate_form { 0 };
+    bool always_sign { false };
+};
+
+template<typename PutChFunc, typename ArgumentListRefT, template<typename T, typename U = ArgumentListRefT> typename NextArgument, typename CharType = char>
+struct PrintfImpl {
+    ALWAYS_INLINE PrintfImpl(PutChFunc& putch, CharType*& bufptr, int const& nwritten)
+        : m_bufptr(bufptr)
+        , m_nwritten(nwritten)
+        , m_putch(putch)
+    {
+    }
+
+    ALWAYS_INLINE int format_s(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        // FIXME: Narrow characters should be converted to wide characters on the fly and vice versa.
+        // https://pubs.opengroup.org/onlinepubs/9699919799/functions/printf.html
+        // https://pubs.opengroup.org/onlinepubs/9699919799/functions/wprintf.html
+#ifndef KERNEL
+        if (state.long_qualifiers) {
+            wchar_t const* sp = NextArgument<wchar_t const*>()(ap);
+            if (!sp)
+                sp = L"(null)";
+            return print_string(m_putch, m_bufptr, sp, wcslen(sp), state.left_pad, state.field_width, state.dot, state.precision, state.has_precision);
+        }
+#endif
+        char const* sp = NextArgument<char const*>()(ap);
+        if (!sp)
+            sp = "(null)";
+        return print_string(m_putch, m_bufptr, sp, strlen(sp), state.left_pad, state.field_width, state.dot, state.precision, state.has_precision);
+    }
+    ALWAYS_INLINE int format_d(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        i64 number = [&]() -> i64 {
+            if (state.long_qualifiers >= 2)
+                return NextArgument<long long int>()(ap);
+            if (state.long_qualifiers == 1)
+                return NextArgument<long int>()(ap);
+            return NextArgument<int>()(ap);
+        }();
+
+        return print_signed_number(m_putch, m_bufptr, number, state.always_sign, state.left_pad, state.zero_pad, state.field_width, state.has_precision, state.precision);
+    }
+    ALWAYS_INLINE int format_i(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return format_d(state, ap);
+    }
+    ALWAYS_INLINE int format_u(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        u64 number = [&]() -> u64 {
+            if (state.long_qualifiers >= 2)
+                return NextArgument<unsigned long long int>()(ap);
+            if (state.long_qualifiers == 1)
+                return NextArgument<unsigned long int>()(ap);
+            return NextArgument<unsigned int>()(ap);
+        }();
+
+        return print_decimal(m_putch, m_bufptr, number, false, false, state.left_pad, state.zero_pad, state.field_width, state.has_precision, state.precision);
+    }
+    ALWAYS_INLINE int format_Q(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return print_decimal(m_putch, m_bufptr, NextArgument<u64>()(ap), false, false, state.left_pad, state.zero_pad, state.field_width, state.has_precision, state.precision);
+    }
+    ALWAYS_INLINE int format_q(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return print_hex(m_putch, m_bufptr, NextArgument<u64>()(ap), false, false, state.left_pad, state.zero_pad, 16, false, 1);
+    }
+#ifndef KERNEL
+    ALWAYS_INLINE int format_g(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        // FIXME: Exponent notation
+        return print_double(m_putch, m_bufptr, NextArgument<double>()(ap), state.always_sign, state.left_pad, state.zero_pad, state.field_width, state.precision, false);
+    }
+    ALWAYS_INLINE int format_f(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return print_double(m_putch, m_bufptr, NextArgument<double>()(ap), state.always_sign, state.left_pad, state.zero_pad, state.field_width, state.precision, true);
+    }
+#endif
+    ALWAYS_INLINE int format_o(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return print_octal_number(m_putch, m_bufptr, NextArgument<u32>()(ap), state.alternate_form, state.left_pad, state.zero_pad, state.field_width, state.has_precision, state.precision);
+    }
+    ALWAYS_INLINE int format_unsigned_hex(ModifierState const& state, ArgumentListRefT ap, bool uppercase) const
+    {
+        u64 number = [&]() -> u64 {
+            if (state.long_qualifiers >= 2)
+                return NextArgument<unsigned long long int>()(ap);
+            if (state.long_qualifiers == 1)
+                return NextArgument<unsigned long int>()(ap);
+            return NextArgument<unsigned int>()(ap);
+        }();
+
+        return print_hex(m_putch, m_bufptr, number, uppercase, state.alternate_form, state.left_pad, state.zero_pad, state.field_width, state.has_precision, state.precision);
+    }
+    ALWAYS_INLINE int format_x(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return format_unsigned_hex(state, ap, false);
+    }
+    ALWAYS_INLINE int format_X(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        return format_unsigned_hex(state, ap, true);
+    }
+    ALWAYS_INLINE int format_n(ModifierState const&, ArgumentListRefT ap) const
+    {
+        *NextArgument<int*>()(ap) = m_nwritten;
+        return 0;
+    }
+    ALWAYS_INLINE int format_p(ModifierState const&, ArgumentListRefT ap) const
+    {
+        return print_hex(m_putch, m_bufptr, NextArgument<FlatPtr>()(ap), false, true, false, true, 8, false, 1);
+    }
+    ALWAYS_INLINE int format_P(ModifierState const&, ArgumentListRefT ap) const
+    {
+        return print_hex(m_putch, m_bufptr, NextArgument<FlatPtr>()(ap), true, true, false, true, 8, false, 1);
+    }
+    ALWAYS_INLINE int format_percent(ModifierState const&, ArgumentListRefT) const
+    {
+        m_putch(m_bufptr, '%');
+        return 1;
+    }
+    ALWAYS_INLINE int format_c(ModifierState const& state, ArgumentListRefT ap) const
+    {
+        char c = NextArgument<int>()(ap);
+        return print_string(m_putch, m_bufptr, &c, 1, state.left_pad, state.field_width, state.dot, state.precision, state.has_precision);
+    }
+    ALWAYS_INLINE int format_unrecognized(CharType format_op, CharType const* fmt, ModifierState const&, ArgumentListRefT) const
+    {
+        dbgln("printf_internal: Unimplemented format specifier {} (fmt: {})", format_op, fmt);
+        return 0;
+    }
+
+protected:
+    CharType*& m_bufptr;
+    int const& m_nwritten;
+    PutChFunc& m_putch;
+};
+
+template<typename T, typename V>
+struct VaArgNextArgument {
+    ALWAYS_INLINE T operator()(V ap) const
+    {
+#ifdef AK_OS_WINDOWS
+        // GCC on msys2 complains about the type of ap,
+        // so let's force the compiler to believe it's a
+        // va_list.
+        return va_arg((va_list&)ap, T);
+#else
+        return va_arg(ap, T);
+#endif
+    }
+};
+
+#define PRINTF_IMPL_DELEGATE_TO_IMPL(c)    \
+    case *#c:                              \
+        ret += impl.format_##c(state, ap); \
+        break;
+
+template<typename PutChFunc, template<typename T, typename U, template<typename X, typename Y> typename V, typename C = char> typename Impl = PrintfImpl, typename ArgumentListT = va_list, template<typename T, typename V = decltype(declval<ArgumentListT&>())> typename NextArgument = VaArgNextArgument, typename CharType = char>
+ALWAYS_INLINE int printf_internal(PutChFunc putch, IdentityType<CharType>* buffer, CharType const*& fmt, ArgumentListT ap)
 {
-    const char* p;
-
     int ret = 0;
-    char* bufptr = buffer;
+    CharType* bufptr = buffer;
 
-    for (p = fmt; *p; ++p) {
-        bool left_pad = false;
-        bool zero_pad = false;
-        bool dot = false;
-        unsigned field_width = 0;
-        unsigned fraction_length = 0;
-        unsigned long_qualifiers = 0;
-        bool size_qualifier = false;
-        (void)size_qualifier;
-        bool alternate_form = 0;
-        bool always_sign = false;
+    Impl<PutChFunc, ArgumentListT&, NextArgument, CharType> impl { putch, bufptr, ret };
+
+    for (CharType const* p = fmt; *p; ++p) {
+        ModifierState state;
         if (*p == '%' && *(p + 1)) {
         one_more:
             ++p;
             if (*p == '.') {
-                dot = true;
+                state.dot = true;
+                state.has_precision = true;
+                state.precision = 0;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p == '-') {
-                left_pad = true;
+                state.left_pad = true;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p == '+') {
-                always_sign = true;
+                state.always_sign = true;
                 if (*(p + 1))
                     goto one_more;
             }
-            if (!zero_pad && !field_width && *p == '0') {
-                zero_pad = true;
+            if (!state.zero_pad && !state.field_width && !state.dot && *p == '0') {
+                state.zero_pad = true;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p >= '0' && *p <= '9') {
-                if (!dot) {
-                    field_width *= 10;
-                    field_width += *p - '0';
+                if (!state.dot) {
+                    state.field_width *= 10;
+                    state.field_width += *p - '0';
                     if (*(p + 1))
                         goto one_more;
                 } else {
-                    fraction_length *= 10;
-                    fraction_length += *p - '0';
+                    state.precision *= 10;
+                    state.precision += *p - '0';
                     if (*(p + 1))
                         goto one_more;
                 }
             }
             if (*p == '*') {
-                field_width = va_arg(ap, int);
+                if (state.dot) {
+                    state.zero_pad = true;
+                    state.precision = NextArgument<int>()(ap);
+                } else {
+                    state.field_width = NextArgument<int>()(ap);
+                }
+
+                if (*(p + 1))
+                    goto one_more;
+            }
+            if (*p == 'h') {
+                ++state.short_qualifiers;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p == 'l') {
-                ++long_qualifiers;
+                ++state.long_qualifiers;
+                if (*(p + 1))
+                    goto one_more;
+            }
+            if (*p == 'j') {
+                state.intmax_qualifier = true;
+                if (*(p + 1))
+                    goto one_more;
+            }
+            if (*p == 't') {
+                state.ptrdiff_qualifier = true;
+                if (*(p + 1))
+                    goto one_more;
+            }
+            if (*p == 'L') {
+                state.long_double_qualifier = true;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p == 'z') {
-                size_qualifier = true;
+                state.size_qualifier = true;
                 if (*(p + 1))
                     goto one_more;
             }
             if (*p == '#') {
-                alternate_form = true;
+                state.alternate_form = true;
                 if (*(p + 1))
                     goto one_more;
             }
             switch (*p) {
-            case 's': {
-                const char* sp = va_arg(ap, const char*);
-                if (!sp)
-                    sp = "(null)";
-                ret += print_string(putch, bufptr, sp, strlen(sp), left_pad, field_width, dot);
-            } break;
-
-            case 'd':
-            case 'i':
-                if (long_qualifiers >= 2)
-                    ret += print_i64(putch, bufptr, va_arg(ap, i64), left_pad, zero_pad, field_width);
-                else
-                    ret += print_signed_number(putch, bufptr, va_arg(ap, int), left_pad, zero_pad, field_width, always_sign);
-                break;
-
-            case 'u':
-                if (long_qualifiers >= 2)
-                    ret += print_u64(putch, bufptr, va_arg(ap, u64), left_pad, zero_pad, field_width);
-                else
-                    ret += print_number(putch, bufptr, va_arg(ap, u32), left_pad, zero_pad, field_width);
-                break;
-
-            case 'Q':
-                ret += print_u64(putch, bufptr, va_arg(ap, u64), left_pad, zero_pad, field_width);
-                break;
-
-            case 'q':
-                ret += print_hex(putch, bufptr, va_arg(ap, u64), false, false, left_pad, zero_pad, 16);
-                break;
-
-#if !defined(KERNEL)
-            case 'g':
-            case 'f':
-                ret += print_double(putch, bufptr, va_arg(ap, double), left_pad, zero_pad, field_width, fraction_length);
-                break;
-#endif
-
-            case 'o':
-                if (alternate_form) {
-                    putch(bufptr, '0');
-                    ++ret;
-                }
-                ret += print_octal_number(putch, bufptr, va_arg(ap, u32), left_pad, zero_pad, field_width);
-                break;
-
-            case 'X':
-            case 'x':
-                ret += print_hex(putch, bufptr, va_arg(ap, u32), *p == 'X', alternate_form, left_pad, zero_pad, field_width);
-                break;
-
-            case 'w':
-                ret += print_hex(putch, bufptr, va_arg(ap, int), false, alternate_form, false, true, 4);
-                break;
-
-            case 'b':
-                ret += print_hex(putch, bufptr, va_arg(ap, int), false, alternate_form, false, true, 2);
-                break;
-
-            case 'c': {
-                char c = va_arg(ap, int);
-                ret += print_string(putch, bufptr, &c, 1, left_pad, field_width, dot);
-            } break;
-
             case '%':
-                putch(bufptr, '%');
-                ++ret;
+                ret += impl.format_percent(state, ap);
                 break;
 
-            case 'P':
-            case 'p':
-                ret += print_hex(putch, bufptr, va_arg(ap, u32), *p == 'P', true, false, true, 8);
-                break;
-
-            case 'n':
-                *va_arg(ap, int*) = ret;
-                break;
-
+                PRINTF_IMPL_DELEGATE_TO_IMPL(P);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(Q);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(X);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(c);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(d);
+#ifndef KERNEL
+                PRINTF_IMPL_DELEGATE_TO_IMPL(f);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(g);
+#endif
+                PRINTF_IMPL_DELEGATE_TO_IMPL(i);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(n);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(o);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(p);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(q);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(s);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(u);
+                PRINTF_IMPL_DELEGATE_TO_IMPL(x);
             default:
-                dbg() << "printf_internal: Unimplemented format specifier " << *p << " (fmt: " << fmt << ")";
+                ret += impl.format_unrecognized(*p, fmt, state, ap);
+                break;
             }
         } else {
             putch(bufptr, *p);
@@ -446,3 +615,9 @@ ALWAYS_INLINE int printf_internal(PutChFunc putch, char* buffer, const char*& fm
     }
     return ret;
 }
+
+#undef PRINTF_IMPL_DELEGATE_TO_IMPL
+
+}
+
+using PrintfImplementation::printf_internal;

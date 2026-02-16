@@ -1,8 +1,7 @@
 [App]
-Name=File Manager
+Name=&File Manager
 Executable=/bin/FileManager
-Category=Utilities
+Category=&Utilities
 
-[Icons]
-16x16=/res/icons/16x16/filetype-folder.png
-32x32=/res/icons/32x32/filetype-folder.png
+[Launcher]
+FileTypes=zip

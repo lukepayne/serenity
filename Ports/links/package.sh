@@ -1,5 +1,7 @@
-#!/bin/bash ../.port_include.sh
-port=links
-version=2.19
-useconfigure=true
-files="http://links.twibright.com/download/links-2.19.tar.bz2 links-2.19.tar.bz2 fa6df86919640e490187ee9d85a4f598"
+#!/usr/bin/env -S bash ../.port_include.sh
+port='links'
+version='2.29'
+useconfigure='true'
+files=(
+    "http://links.twibright.com/download/links-${version}.tar.bz2#22aa96c0b38e1a6f8f7ed9d7a4167a47fc37246097759ef6059ecf8f9ead7998"
+)

@@ -1,21 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 # This file will need to be run in bash, for now.
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+. "${DIR}/../Meta/shell_include.sh"
+
+exit_if_running_as_root "Do not run BuildQemu.sh as root, parts of your Toolchain directory will become root-owned"
+
 echo "$DIR"
 
-TARGET=i686-pc-serenity
-PREFIX="$DIR/Local"
-SYSROOT="$DIR/../Root"
+PREFIX="$DIR/Local/qemu"
+BUILD=$(realpath "$DIR/../Build")
+SYSROOT="$BUILD/Root"
 
-QEMU300_MD5SUM="6a5c8df583406ea24ef25b239c3243e0"
-QEMU410_MD5SUM="cdf2b5ca52b9abac9bacb5842fa420f8"
-
-QEMU_VERSION="qemu-4.1.0"
-QEMU_MD5SUM="${QEMU410_MD5SUM}"
+source "${DIR}/../Ports/qemu/version.sh"
 
 echo PREFIX is "$PREFIX"
 echo SYSROOT is "$SYSROOT"
@@ -23,50 +23,53 @@ echo SYSROOT is "$SYSROOT"
 mkdir -p "$DIR/Tarballs"
 
 pushd "$DIR/Tarballs"
-    if [ ! -e "$QEMU_VERSION.tar.xz" ]; then
-        curl -O "https://download.qemu.org/$QEMU_VERSION.tar.xz"
+    if [ ! -e "${QEMU_ARCHIVE}" ]; then
+        curl -C - -O "${QEMU_ARCHIVE_URL}"
     else
-        echo "Skipped downloading $QEMU_VERSION"
+        echo "Skipped downloading ${QEMU_ARCHIVE}"
     fi
 
-    md5="$(md5sum $QEMU_VERSION.tar.xz | cut -f1 -d' ')"
-    echo "qemu md5='$md5'"
-    if  [ "$md5" != "$QEMU_MD5SUM" ] ; then
-        echo "qemu md5 sum mismatching, please run script again."
-        rm $$QEMU_VERSION.tar.xz
+    if ! check_sha256 "${QEMU_ARCHIVE}" "${QEMU_ARCHIVE_SHA256SUM}"; then
+        echo "qemu sha256 sum mismatching, please run script again."
+        rm -f "${QEMU_ARCHIVE}"
         exit 1
     fi
 
-    if [ ! -d "$QEMU_VERSION" ]; then
-        echo "Extracting qemu..."
-        tar -xf "$QEMU_VERSION.tar.xz"
-    else
-        echo "Skipped extracting qemu"
+    if [ -d "qemu-$QEMU_VERSION" ]; then
+        rm -rf "qemu-$QEMU_VERSION"
     fi
+
+    echo "Extracting qemu..."
+    tar -xf "${QEMU_ARCHIVE}"
 popd
 
 mkdir -p "$PREFIX"
 mkdir -p "$DIR/Build/qemu"
 
-if [ -z "$MAKEJOBS" ]; then
-    MAKEJOBS=$(nproc)
-fi
+NPROC=$(get_number_of_processing_units)
+[ -z "$MAKEJOBS" ] && MAKEJOBS=${NPROC}
 
+EXTRA_ARGS=""
 if [[ $(uname) == "Darwin" ]]
 then
     UI_LIB=cocoa
+
+    # SDL causes a crash on startup: "NSWindow drag regions should only be invalidated on the Main Thread!"
+    EXTRA_ARGS="--disable-sdl"
 else
     UI_LIB=gtk
+    # Allows copy pasting between Serenity and the host.
+    EXTRA_ARGS="--enable-gtk-clipboard"
 fi
 
 echo Using $UI_LIB based UI
 
-pushd "$DIR/Build/"
-    pushd qemu
-        "$DIR"/Tarballs/$QEMU_VERSION/configure --prefix="$PREFIX" \
-                                                --target-list=i386-softmmu \
-                                                --enable-$UI_LIB || exit 1
-        make -j "$MAKEJOBS" || exit 1
-        make install || exit 1
-    popd
+pushd "$DIR/Build/qemu"
+    "$DIR"/Tarballs/qemu-"${QEMU_VERSION}"/configure --prefix="$PREFIX" \
+                                            --target-list=aarch64-softmmu,x86_64-softmmu,riscv64-softmmu \
+                                            --enable-$UI_LIB \
+                                            --enable-slirp \
+                                            $EXTRA_ARGS || exit 1
+    make -j "$MAKEJOBS" || exit 1
+    make install || exit 1
 popd

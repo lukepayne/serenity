@@ -1,45 +1,32 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/Function.h>
 #include <AK/HashMap.h>
+#include <AK/IntegralMath.h>
 #include <AK/SinglyLinkedList.h>
-#include <AK/WeakPtr.h>
-#include <Kernel/Net/IPv4Socket.h>
+#include <AK/Time.h>
+#include <Kernel/Library/LockWeakPtr.h>
+#include <Kernel/Locking/MutexProtected.h>
+#include <Kernel/Net/IP/Socket.h>
+#include <Kernel/Time/TimerQueue.h>
 
 namespace Kernel {
 
-class TCPSocket final : public IPv4Socket
-    , public Weakable<TCPSocket> {
+class TCPSocket final : public IPv4Socket {
 public:
-    static void for_each(Function<void(const TCPSocket&)>);
-    static NonnullRefPtr<TCPSocket> create(int protocol);
+    static void for_each(Function<void(TCPSocket const&)>);
+    static ErrorOr<void> try_for_each(Function<ErrorOr<void>(TCPSocket const&)>);
+    static ErrorOr<NonnullRefPtr<TCPSocket>> try_create(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer);
     virtual ~TCPSocket() override;
+
+    virtual bool unref() const override;
 
     enum class Direction {
         Unspecified,
@@ -48,19 +35,19 @@ public:
         Passive,
     };
 
-    static const char* to_string(Direction direction)
+    static StringView to_string(Direction direction)
     {
         switch (direction) {
         case Direction::Unspecified:
-            return "Unspecified";
+            return "Unspecified"sv;
         case Direction::Outgoing:
-            return "Outgoing";
+            return "Outgoing"sv;
         case Direction::Incoming:
-            return "Incoming";
+            return "Incoming"sv;
         case Direction::Passive:
-            return "Passive";
+            return "Passive"sv;
         default:
-            return "None";
+            return "None"sv;
         }
     }
 
@@ -78,33 +65,33 @@ public:
         TimeWait,
     };
 
-    static const char* to_string(State state)
+    static StringView to_string(State state)
     {
         switch (state) {
         case State::Closed:
-            return "Closed";
+            return "Closed"sv;
         case State::Listen:
-            return "Listen";
+            return "Listen"sv;
         case State::SynSent:
-            return "SynSent";
+            return "SynSent"sv;
         case State::SynReceived:
-            return "SynReceived";
+            return "SynReceived"sv;
         case State::Established:
-            return "Established";
+            return "Established"sv;
         case State::CloseWait:
-            return "CloseWait";
+            return "CloseWait"sv;
         case State::LastAck:
-            return "LastAck";
+            return "LastAck"sv;
         case State::FinWait1:
-            return "FinWait1";
+            return "FinWait1"sv;
         case State::FinWait2:
-            return "FinWait2";
+            return "FinWait2"sv;
         case State::Closing:
-            return "Closing";
+            return "Closing"sv;
         case State::TimeWait:
-            return "TimeWait";
+            return "TimeWait"sv;
         default:
-            return "None";
+            return "None"sv;
         }
     }
 
@@ -113,21 +100,22 @@ public:
         FINDuringConnect,
         RSTDuringConnect,
         UnexpectedFlagsDuringConnect,
+        RetransmitTimeout,
     };
 
-    static const char* to_string(Error error)
+    static StringView to_string(Error error)
     {
         switch (error) {
         case Error::None:
-            return "None";
+            return "None"sv;
         case Error::FINDuringConnect:
-            return "FINDuringConnect";
+            return "FINDuringConnect"sv;
         case Error::RSTDuringConnect:
-            return "RSTDuringConnect";
+            return "RSTDuringConnect"sv;
         case Error::UnexpectedFlagsDuringConnect:
-            return "UnexpectedFlagsDuringConnect";
+            return "UnexpectedFlagsDuringConnect"sv;
         default:
-            return "Invalid";
+            return "Invalid"sv;
         }
     }
 
@@ -149,48 +137,80 @@ public:
     u32 packets_out() const { return m_packets_out; }
     u32 bytes_out() const { return m_bytes_out; }
 
-    void send_tcp_packet(u16 flags, const void* = nullptr, size_t = 0);
-    void send_outgoing_packets();
-    void receive_tcp_packet(const TCPPacket&, u16 size);
+    void set_send_window_scale(size_t scale)
+    {
+        m_window_scaling_supported = true;
+        m_send_window_scale = scale;
+    }
 
-    static Lockable<HashMap<IPv4SocketTuple, TCPSocket*>>& sockets_by_tuple();
-    static RefPtr<TCPSocket> from_tuple(const IPv4SocketTuple& tuple);
-    static RefPtr<TCPSocket> from_endpoints(const IPv4Address& local_address, u16 local_port, const IPv4Address& peer_address, u16 peer_port);
+    // FIXME: Make this configurable?
+    static constexpr u32 maximum_duplicate_acks = 5;
+    void set_duplicate_acks(u32 acks) { m_duplicate_acks = acks; }
+    u32 duplicate_acks() const { return m_duplicate_acks; }
 
-    static Lockable<HashMap<IPv4SocketTuple, RefPtr<TCPSocket>>>& closing_sockets();
+    ErrorOr<void> send_ack(bool allow_duplicate = false);
+    ErrorOr<void> send_tcp_packet(u16 flags, UserOrKernelBuffer const* = nullptr, size_t = 0, RoutingDecision* = nullptr);
+    void receive_tcp_packet(TCPPacket const&, u16 size);
 
-    RefPtr<TCPSocket> create_client(const IPv4Address& local_address, u16 local_port, const IPv4Address& peer_address, u16 peer_port);
-    void set_originator(TCPSocket& originator) { m_originator = originator.make_weak_ptr(); }
+    bool should_delay_next_ack() const;
+
+    static MutexProtected<HashMap<IPv4SocketTuple, TCPSocket*>>& sockets_by_tuple();
+    static RefPtr<TCPSocket> from_tuple(IPv4SocketTuple const& tuple);
+
+    static MutexProtected<HashMap<IPv4SocketTuple, RefPtr<TCPSocket>>>& closing_sockets();
+
+    ErrorOr<NonnullRefPtr<TCPSocket>> try_create_client(IPv4Address const& local_address, u16 local_port, IPv4Address const& peer_address, u16 peer_port);
+    void set_originator(TCPSocket& originator) { m_originator = originator; }
     bool has_originator() { return !!m_originator; }
     void release_to_originator();
-    void release_for_accept(RefPtr<TCPSocket>);
+    void release_for_accept(NonnullRefPtr<TCPSocket>);
 
-    virtual KResult close() override;
+    void retransmit_packets();
+
+    virtual ErrorOr<void> close() override;
+
+    virtual bool can_write(OpenFileDescription const&, u64) const override;
+
+    static NetworkOrdered<u16> compute_tcp_checksum(IPv4Address const& source, IPv4Address const& destination, TCPPacket const&, u16 payload_size);
+
+    virtual ErrorOr<void> setsockopt(int level, int option, Userspace<void const*>, socklen_t) override;
+    virtual ErrorOr<void> getsockopt(OpenFileDescription&, int level, int option, Userspace<void*>, Userspace<socklen_t*>) override;
 
 protected:
     void set_direction(Direction direction) { m_direction = direction; }
 
 private:
-    explicit TCPSocket(int protocol);
-    virtual const char* class_name() const override { return "TCPSocket"; }
-
-    static NetworkOrdered<u16> compute_tcp_checksum(const IPv4Address& source, const IPv4Address& destination, const TCPPacket&, u16 payload_size);
+    explicit TCPSocket(int protocol, NonnullOwnPtr<DoubleBuffer> receive_buffer, NonnullOwnPtr<KBuffer> scratch_buffer, NonnullRefPtr<Timer> timer);
+    virtual StringView class_name() const override { return "TCPSocket"sv; }
 
     virtual void shut_down_for_writing() override;
 
-    virtual int protocol_receive(const KBuffer&, void* buffer, size_t buffer_size, int flags) override;
-    virtual int protocol_send(const void*, size_t) override;
-    virtual KResult protocol_connect(FileDescription&, ShouldBlock) override;
-    virtual int protocol_allocate_local_port() override;
+    virtual ErrorOr<size_t> protocol_receive(ReadonlyBytes raw_ipv4_packet, UserOrKernelBuffer& buffer, size_t buffer_size, int flags) override;
+    virtual ErrorOr<size_t> protocol_send(UserOrKernelBuffer const&, size_t) override;
+    virtual ErrorOr<void> protocol_connect(OpenFileDescription&) override;
+    virtual ErrorOr<size_t> protocol_size(ReadonlyBytes raw_ipv4_packet) override;
     virtual bool protocol_is_disconnected() const override;
-    virtual KResult protocol_bind() override;
-    virtual KResult protocol_listen() override;
+    virtual ErrorOr<void> protocol_bind() override;
+    virtual ErrorOr<void> protocol_listen() override;
 
-    WeakPtr<TCPSocket> m_originator;
+    void do_state_closed();
+
+    void enqueue_for_retransmit();
+    void dequeue_for_retransmit();
+
+    static constexpr size_t receive_window_scale()
+    {
+        auto buffer_size_bit_length = AK::log2(receive_buffer_size) + 1;
+        if (buffer_size_bit_length < 16)
+            return 0;
+        return buffer_size_bit_length - 16;
+    }
+
+    LockWeakPtr<TCPSocket> m_originator;
     HashMap<IPv4SocketTuple, NonnullRefPtr<TCPSocket>> m_pending_release_for_accept;
     Direction m_direction { Direction::Unspecified };
     Error m_error { Error::None };
-    RefPtr<NetworkAdapter> m_adapter;
+    SpinlockProtected<RefPtr<NetworkAdapter>, LockRank::None> m_adapter;
     u32 m_sequence_number { 0 };
     u32 m_ack_number { 0 };
     State m_state { State::Closed };
@@ -201,13 +221,46 @@ private:
 
     struct OutgoingPacket {
         u32 ack_number { 0 };
-        ByteBuffer buffer;
+        RefPtr<PacketWithTimestamp> buffer;
+        size_t ipv4_payload_offset;
+        LockWeakPtr<NetworkAdapter> adapter;
         int tx_counter { 0 };
-        timeval tx_time { 0, 0 };
     };
 
-    Lock m_not_acked_lock { "TCPSocket unacked packets" };
-    SinglyLinkedList<OutgoingPacket> m_not_acked;
+    struct UnackedPackets {
+        SinglyLinkedList<OutgoingPacket> packets;
+        size_t size { 0 };
+    };
+
+    MutexProtected<UnackedPackets> m_unacked_packets;
+
+    u32 m_duplicate_acks { 0 };
+
+    u32 m_last_ack_number_sent { 0 };
+    MonotonicTime m_last_ack_sent_time;
+
+    static constexpr Duration maximum_segment_lifetime = Duration::from_seconds(120);
+
+    // FIXME: Make this configurable (sysctl)
+    static constexpr u32 maximum_retransmits = 5;
+    MonotonicTime m_last_retransmit_time;
+    u32 m_retransmit_attempts { 0 };
+
+    // Default to maximum window size. receive_tcp_packet() will update from the
+    // peer's advertised window size.
+    u32 m_send_window_size { 64 * KiB };
+    bool m_window_scaling_supported { false };
+    size_t m_send_window_scale { 0 };
+
+    IntrusiveListNode<TCPSocket> m_retransmit_list_node;
+
+    Optional<IPv4SocketTuple> m_registered_socket_tuple;
+
+    NonnullRefPtr<Timer> m_timer;
+
+public:
+    using RetransmitList = IntrusiveList<&TCPSocket::m_retransmit_list_node>;
+    static MutexProtected<TCPSocket::RetransmitList>& sockets_for_retransmit();
 };
 
 }

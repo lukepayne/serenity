@@ -34,20 +34,20 @@ buffer while using the returned string.
 
 int main()
 {
-    char path1[] = "/home/anon/ReadMe.md";
-    dbg() << basename(path1); // should be "ReadMe.md"
+    char path1[] = "/home/anon/README.md";
+    dbgln("{}", basename(path1)); // should be "README.md"
 
     char path2[] = "foo/bar/";
-    dbg() << basename(path2); // should be "bar"
+    dbgln("{}", basename(path2)); // should be "bar"
 
     char path3[] = "foo";
-    dbg() << basename(path3); // should be "foo"
+    dbgln("{}", basename(path3)); // should be "foo"
 
     char path4[] = "/";
-    dbg() << basename(path4); // should be "/"
+    dbgln("{}", basename(path4)); // should be "/"
 }
 ```
 
 ## See also
 
-* [`dirname`(3)](dirname.md)
+-   [`dirname`(3)](help://man/3/dirname)

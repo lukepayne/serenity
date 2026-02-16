@@ -1,11 +1,7 @@
 [App]
-Name=Font Editor
+Name=&Font Editor
 Executable=/bin/FontEditor
-Category=Development
-
-[Icons]
-16x16=/res/icons/16x16/app-font-editor.png
-32x32=/res/icons/32x32/app-font-editor.png
+Category=D&evelopment
 
 [Launcher]
 FileTypes=font

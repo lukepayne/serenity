@@ -1,68 +1,86 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, sin-ack <sin-ack@protonmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Badge.h>
+#include <AK/Checked.h>
 #include <AK/CircularQueue.h>
-#include <AK/WeakPtr.h>
+#include <AK/HashMap.h>
+#include <AK/NonnullOwnPtr.h>
+#include <Kernel/API/InodeWatcherEvent.h>
 #include <Kernel/FileSystem/File.h>
+#include <Kernel/Forward.h>
+#include <Kernel/Locking/MutexProtected.h>
+#include <Kernel/Locking/SpinlockProtected.h>
 
 namespace Kernel {
 
-class Inode;
+// A specific description of a watch.
+struct WatchDescription {
+    int wd;
+    Inode& inode;
+    unsigned event_mask;
+
+    static ErrorOr<NonnullOwnPtr<WatchDescription>> create(int wd, Inode& inode, unsigned event_mask)
+    {
+        return adopt_nonnull_own_or_enomem(new (nothrow) WatchDescription(wd, inode, event_mask));
+    }
+
+private:
+    WatchDescription(int wd, Inode& inode, unsigned event_mask)
+        : wd(wd)
+        , inode(inode)
+        , event_mask(event_mask)
+    {
+    }
+};
 
 class InodeWatcher final : public File {
 public:
-    static NonnullRefPtr<InodeWatcher> create(Inode&);
+    static ErrorOr<NonnullRefPtr<InodeWatcher>> try_create();
     virtual ~InodeWatcher() override;
 
-    struct Event {
-        enum class Type {
-            Invalid = 0,
-            Modified,
-        };
+    virtual bool can_read(OpenFileDescription const&, u64) const override;
+    virtual ErrorOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    // Can't write to an inode watcher.
+    virtual bool can_write(OpenFileDescription const&, u64) const override { return true; }
+    virtual ErrorOr<size_t> write(OpenFileDescription&, u64, UserOrKernelBuffer const&, size_t) override { return EIO; }
+    virtual ErrorOr<void> close() override;
 
-        Type type { Type::Invalid };
-    };
+    virtual ErrorOr<NonnullOwnPtr<KString>> pseudo_path(OpenFileDescription const&) const override;
+    virtual StringView class_name() const override { return "InodeWatcher"sv; }
+    virtual bool is_inode_watcher() const override { return true; }
 
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
-    virtual ssize_t read(FileDescription&, size_t, u8*, ssize_t) override;
-    virtual ssize_t write(FileDescription&, size_t, const u8*, ssize_t) override;
-    virtual String absolute_path(const FileDescription&) const override;
-    virtual const char* class_name() const override { return "InodeWatcher"; };
+    void notify_inode_event(Badge<Inode>, InodeIdentifier, InodeWatcherEvent::Type, StringView name = {});
 
-    void notify_inode_event(Badge<Inode>, Event::Type);
+    ErrorOr<int> register_inode(Inode&, unsigned event_mask);
+    ErrorOr<void> unregister_by_wd(int);
+    void unregister_by_inode(Badge<Inode>, InodeIdentifier);
 
 private:
-    explicit InodeWatcher(Inode&);
+    explicit InodeWatcher() { }
 
-    WeakPtr<Inode> m_inode;
-    CircularQueue<Event, 32> m_queue;
+    struct Event {
+        int wd { 0 };
+        InodeWatcherEvent::Type type { InodeWatcherEvent::Type::Invalid };
+        OwnPtr<KString> path;
+    };
+    SpinlockProtected<CircularQueue<Event, 32>, LockRank::None> m_queue;
+    Checked<int> m_wd_counter { 1 };
+
+    // NOTE: These two hashmaps provide two different ways of reaching the same
+    // watch description, so they will overlap.
+    struct WatchMaps {
+        HashMap<int, NonnullOwnPtr<WatchDescription>> wd_to_watches;
+        HashMap<InodeIdentifier, WatchDescription*> inode_to_watches;
+    };
+
+    mutable SpinlockProtected<WatchMaps, LockRank::None> m_watch_maps;
 };
 
 }

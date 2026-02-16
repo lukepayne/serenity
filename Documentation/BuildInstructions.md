@@ -1,108 +1,157 @@
-## SerenityOS build instructions
+# SerenityOS Build Instructions
 
-### Prerequisites
+## Prerequisites
 
-#### Linux prerequisites
 Make sure you have all the dependencies installed:
 
-**Debian / Ubuntu**
-```bash
-sudo apt install build-essential cmake curl libmpfr-dev libmpc-dev libgmp-dev e2fsprogs qemu-system-i386 qemu-utils
+### Debian / Ubuntu
+
+```console
+sudo apt install build-essential cmake curl libmpfr-dev libmpc-dev libgmp-dev e2fsprogs ninja-build qemu-system-gui qemu-system-x86 qemu-utils ccache rsync unzip texinfo libssl-dev zlib1g-dev
 ```
 
-**Fedora**
-```bash
-sudo dnf install curl cmake mpfr-devel libmpc-devel gmp-devel e2fsprogs @"C Development Tools and Libraries" @Virtualization
+Optional: `fuse2fs` for [building images without root](https://github.com/SerenityOS/serenity/pull/11224).
+
+#### GCC 14 or Clang 17+
+
+A host compiler that supports C++26 features is required for building host tools, the newer the better. Tested versions include gcc-14 and Clang 17 through 19.
+
+On Ubuntu gcc-14 is available in the repositories of 24.04 (Noble) and later.
+If you are running an older version, you will either need to upgrade, or find an alternative installation source
+(i.e. from the [ubuntu-toolchain-r/test PPA](https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test)).
+
+On both Ubuntu and Debian, recent versions of Clang are available in the [LLVM apt repositories](https://apt.llvm.org/).
+
+Next, update your local package information from the new repositories:
+
+```console
+sudo apt update
 ```
 
-**Arch Linux / Manjaro**
-```bash
-sudo pacman -S base-devel cmake curl mpfr libmpc gmp e2fsprogs qemu qemu-arch-extra
+Now on Ubuntu or Debian you can install gcc-14 with apt like this:
+
+```console
+sudo apt install gcc-14 g++-14
 ```
 
-Ensure your gcc version is >= 8 with `gcc --version`. Otherwise, install it (on Ubuntu) with:
-```bash
-sudo add-apt-repository ppa:ubuntu-toolchain-r/test
-sudo apt-get install gcc-9 g++-9
-sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 900 --slave /usr/bin/g++ g++ /usr/bin/g++-9
+For Clang, the following packages are required (for example Clang 19). Note that the `-dev` packages are only necessary when jakt is enabled.
+
+```
+sudo apt install libclang-19-dev clang-19 llvm-19 llvm-19-dev
 ```
 
-#### macOS prerequisites
-Make sure you have all the dependencies installed:
-```bash
-brew install coreutils
-brew tap discoteq/discoteq
-brew install flock
-brew install qemu
-brew install wget
-brew install e2fsprogs
-brew install m4
-brew install autoconf
-brew install libtool
-brew install automake
-brew install bash
-brew cask install osxfuse
-Toolchain/BuildFuseExt2.sh
+#### QEMU 6.2 or later
+
+Version 6.2 of QEMU is available in Ubuntu 22.04. On earlier versions of Ubuntu,
+you can build the recommended version of QEMU as provided by the toolchain by running
+`Toolchain/BuildQemu.sh`.
+Note that you might need additional dev packages in order to build QEMU on your machine:
+
+```console
+sudo apt install libgtk-3-dev libpixman-1-dev libsdl2-dev libslirp-dev libspice-server-dev
 ```
 
-Notes: 
-- fuse-ext2 is not available as brew formula so it must be installed using `BuildFuseExt2.sh`
-- Xcode and `xcode-tools` must be installed (`git` is required by some scripts)
-- coreutils is needed to build gcc cross compiler
-- `flock` command can also be installed with `brew install util-linux` but in that case you will need to add it to `$PATH`
-- qemu is needed to run the compiled OS image. You can also build it using the `BuildQemu.sh` script
-- osxfuse, e2fsprogs, m4, autoconf, automake, libtool and `BuildFuseExt2.sh` are needed if you want to build the root filesystem disk image natively on macOS. This allows mounting an EXT2 fs and also installs commands like `mke2fs` that are not available on stock macOS. 
-- bash is needed because the default version installed on macOS doesn't support globstar
-- If you install some commercial EXT2 macOS fs handler instead of osxfuse and fuse-ext2, you will need to `brew install e2fsprogs` to obtain `mke2fs` anyway.
+#### CMake version 3.25.0 or later
 
-#### OpenBSD prerequisites
-```
-pkg_add bash gmp gcc git flock gmake sudo
-```
+Serenity-specific patches were upstreamed to CMake in major version 3.25. To avoid carrying
+patches to CMake, the minimum required CMake to build Serenity is set to that version.
+If more patches are upstreamed to CMake, the minimum will be bumped again once that version releases.
 
-#### FreeBSD prerequisites
-```
-$ pkg add coreutils gmake bash sudo git
-$ ln -s /usr/local/bin/ginstall /usr/local/bin/install
+To accommodate distributions that do not ship bleeding-edge CMake versions, the build scripts will
+attempt to build CMake from source if the version on your path is older than 3.25.x.
+
+If you have previously compiled SerenityOS with an older or distribution-provided version of CMake,
+you will need to manually remove the CMakeCache.txt files, as these files reference the older CMake version and path.
+
+```console
+rm Build/*/CMakeCache.txt
 ```
 
-### Build
-> Before starting, make sure that you have configured your global identity for git, or the first script will fail after running for a bit.
+### Windows
 
-Go into the `Toolchain/` directory and run the **BuildIt.sh** script:
-```bash
-$ cd Toolchain
-$ ./BuildIt.sh
+If you're on Windows you can use WSL2 to build SerenityOS. Please have a look at the [Windows guide](BuildInstructionsWindows.md)
+for details.
+
+### Arch Linux / Manjaro
+
+```console
+sudo pacman -S --needed base-devel cmake curl mpfr libmpc gmp e2fsprogs ninja qemu-desktop qemu-system-aarch64 ccache rsync unzip
 ```
 
-Building the toolchain will also automatically create a `Build/` directory for the build to live in, and build cmake inside that directory.
+Optional: `fuse2fs` for [building images without root](https://github.com/SerenityOS/serenity/pull/11224), and `clang llvm llvm-libs` for building with Clang.
 
-Once the toolchain and cmake have been built, go into the `Build/` directory and run the `make` and `make install` commands:
-```bash
-$ cd ..
-$ cd Build
-$ make
-$ make install
+### SerenityOS
+
+The following ports need to be installed:
+
+```console
+bash cmake curl e2fsprogs gawk genext2fs git ninja patch python3 qemu rsync
 ```
 
-This will compile all of SerenityOS and install the built files into `Root/` inside the build tree. `make install` actually pulls in the regular `make` (`make all`) automatically, so there isn't really a need to run it explicitly. You may also want ask `make` to build things in parallel by using `-j`, optionally specifying the maximum number of jobs to run.
+Additionally, for building using LLVM, install the `llvm` port.
+For building using GCC, install the `gcc`, `gmp` and `mpc` ports.
 
-Now to build a disk image, run `make image`, and if nothing breaks too much, take it for a spin by using `make run`.
-```bash
-$ make image
-$ make run
+Due to not-yet-finished POSIX shell support in `Shell`, a symlink from `/bin/sh` to `/usr/local/bin/bash` is required.
+This is best achieved by adding `ln -sf /usr/local/bin/bash mnt/bin/sh` to your [customization script](AdvancedBuildInstructions.md#customizing-the-disk-image).
+
+### Other systems
+
+There is also documentation for installing the build prerequisites for some less commonly used systems:
+
+-   [Other Linux distributions and \*NIX systems](BuildInstructionsOther.md)
+-   [macOS](BuildInstructionsMacOS.md)
+
+## Build
+
+Run the following command to build and run SerenityOS:
+
+```console
+Meta/serenity.sh run
 ```
 
-Note that the `anon` user is able to become `root` without password by default, as a development convenience.
-To prevent this, remove `anon` from the `wheel` group and he will no longer be able to run `/bin/su`.
+This will compile all of SerenityOS and install the built files into the `Build/<architecture>/Root` directory inside your Git
+repository. It will also build a disk image and start SerenityOS using QEMU. The chosen architecture defaults to
+your host architecture. Supported architectures are x86_64, aarch64 and riscv64.
 
-On Linux, QEMU is significantly faster if it's able to use KVM. The run script will automatically enable KVM if `/dev/kvm` exists and is readable+writable by the current user.
+The first time this command is executed, it will also download some required database files from the internet and build
+the SerenityOS cross-compiler toolchain. These steps only have to be done once, so the next build will go much faster.
+When we update to a newer compiler, you might be prompted to re-build the toolchain; see the [troubleshooting guide](Troubleshooting.md#the-toolchain-is-outdated)
+for what to do when this happens.
 
-Bare curious users may even consider sourcing suitable hardware to [install Serenity on a physical PC.](https://github.com/SerenityOS/serenity/blob/master/Documentation/INSTALL.md)
+If, during build, an error like `fusermount: failed to open /etc/mtab: No such file or directory` appears, you have installed `fuse2fs` but your system does not provide the mtab symlink for various reasons. Simply create this symlink with `ln -sv /proc/self/mounts /etc/mtab`.
 
-Later on, when you `git pull` to get the latest changes, there's no need to rebuild the toolchain. You can simply run `make install`, `make image`, `make run` again. CMake will only rebuild those parts that have been updated.
+Note that the `anon` user is able to become `root` without a password by default, as a development convenience.
+To prevent this, remove `anon` from the `wheel` group and it will no longer be able to run `/bin/su`.
 
-You may also want to replace `make` with `ninja` in the above commands for some additional build speed benefits. To do this, go to an empty directory at the root and call `cmake .. -G Ninja` inside that directory. You might either create a new directory or reuse the existing `Build` directory after cleaning it.
+By default the `anon` user account's password is: `foo`
 
-#### Ports
-To add a package from the ports collection to Serenity, for example curl, go into `Ports/curl/` and run **./package.sh**. The sourcecode for the package will be downloaded and the package will be built. After that, run **make image** from the `Build/` directory to update the disk image. The next time you start Serenity with **make run**, `curl` will be available.
+If you want to test whether your code changes compile without running the VM you can use
+`Meta/serenity.sh build`. The `serenity.sh` script also provides a number of other commands. Run the script without
+arguments for a list.
+
+## Ports
+
+To add a package from the ports collection to Serenity, for example curl, change into the `Ports/curl` directory and
+run `./package.sh`. The source code for the package will be downloaded and the package will be built. The next time you
+start Serenity, `curl` will be available.
+
+Ports might also have additional dependencies. Most prominently, you may need:
+`autoconf`, `automake`, `bison`, `flex`, `gettext`, `gperf`, `help2man`, `imagemagick` (specifically "convert"),
+`libgpg-error-dev`, `libtool`, `lzip`, `meson`, `nasm` (or another assembler), `python3-packaging`, `qt6-base-dev`,
+`rename`, `zip`.
+
+For select ports you might need slightly more exotic dependencies such as:
+
+-   `file` (version 5.44 exactly, for file)
+-   `libpython3-dev` (most prominently for boost)
+-   `lua` (for luarocks)
+-   `openjdk-17-jdk` (to compile OpenJDK)
+-   `p7zip-full` (for msttcorefonts)
+-   `rake` (to build mruby).
+
+You may also need a symlink from "/usr/bin/python" to "/usr/bin/python3"; some ports depend on "python" existing, most notably ninja.
+
+## More information
+
+At this point you should have a fully functioning VM for SerenityOS. The [advanced build instructions guide](AdvancedBuildInstructions.md)
+has more information for some less commonly used features of the build system.

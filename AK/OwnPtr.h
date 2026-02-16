@@ -1,43 +1,30 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Error.h>
+#include <AK/Forward.h>
 #include <AK/NonnullOwnPtr.h>
+#include <AK/RefCounted.h>
+
+#define OWNPTR_SCRUB_BYTE 0xf0
 
 namespace AK {
 
-template<typename T>
-class OwnPtr {
+template<typename T, typename TDeleter>
+class [[nodiscard]] OwnPtr {
 public:
-    OwnPtr() {}
-    explicit OwnPtr(T* ptr)
-        : m_ptr(ptr)
+    OwnPtr() = default;
+
+    OwnPtr(decltype(nullptr))
+        : m_ptr(nullptr)
     {
     }
+
     OwnPtr(OwnPtr&& other)
         : m_ptr(other.leak_ptr())
     {
@@ -53,41 +40,37 @@ public:
         : m_ptr(other.leak_ptr())
     {
     }
-    OwnPtr(std::nullptr_t) {};
     ~OwnPtr()
     {
         clear();
 #ifdef SANITIZE_PTRS
-        if constexpr (sizeof(T*) == 8)
-            m_ptr = (T*)(0xe1e1e1e1e1e1e1e1);
-        else
-            m_ptr = (T*)(0xe1e1e1e1);
+        m_ptr = (T*)(explode_byte(OWNPTR_SCRUB_BYTE));
 #endif
     }
 
-    OwnPtr(const OwnPtr&) = delete;
+    OwnPtr(OwnPtr const&) = delete;
     template<typename U>
-    OwnPtr(const OwnPtr<U>&) = delete;
-    OwnPtr& operator=(const OwnPtr&) = delete;
+    OwnPtr(OwnPtr<U> const&) = delete;
+    OwnPtr& operator=(OwnPtr const&) = delete;
     template<typename U>
-    OwnPtr& operator=(const OwnPtr<U>&) = delete;
+    OwnPtr& operator=(OwnPtr<U> const&) = delete;
 
     template<typename U>
-    OwnPtr(const NonnullOwnPtr<U>&) = delete;
+    OwnPtr(NonnullOwnPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr& operator=(const NonnullOwnPtr<U>&) = delete;
+    OwnPtr& operator=(NonnullOwnPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr(const RefPtr<U>&) = delete;
+    OwnPtr(RefPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr(const NonnullRefPtr<U>&) = delete;
+    OwnPtr(NonnullRefPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr(const WeakPtr<U>&) = delete;
+    OwnPtr(WeakPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr& operator=(const RefPtr<U>&) = delete;
+    OwnPtr& operator=(RefPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr& operator=(const NonnullRefPtr<U>&) = delete;
+    OwnPtr& operator=(NonnullRefPtr<U> const&) = delete;
     template<typename U>
-    OwnPtr& operator=(const WeakPtr<U>&) = delete;
+    OwnPtr& operator=(WeakPtr<U> const&) = delete;
 
     OwnPtr& operator=(OwnPtr&& other)
     {
@@ -109,19 +92,13 @@ public:
     {
         OwnPtr ptr(move(other));
         swap(ptr);
-        ASSERT(m_ptr);
+        VERIFY(m_ptr);
         return *this;
     }
 
-    OwnPtr& operator=(T* ptr)
-    {
-        if (m_ptr != ptr)
-            delete m_ptr;
-        m_ptr = ptr;
-        return *this;
-    }
+    OwnPtr& operator=(T* ptr) = delete;
 
-    OwnPtr& operator=(std::nullptr_t)
+    OwnPtr& operator=(nullptr_t)
     {
         clear();
         return *this;
@@ -129,13 +106,13 @@ public:
 
     void clear()
     {
-        delete m_ptr;
-        m_ptr = nullptr;
+        auto* ptr = exchange(m_ptr, nullptr);
+        TDeleter {}(ptr);
     }
 
     bool operator!() const { return !m_ptr; }
 
-    T* leak_ptr()
+    [[nodiscard]] T* leak_ptr()
     {
         T* leaked_ptr = m_ptr;
         m_ptr = nullptr;
@@ -144,58 +121,57 @@ public:
 
     NonnullOwnPtr<T> release_nonnull()
     {
-        ASSERT(m_ptr);
+        VERIFY(m_ptr);
         return NonnullOwnPtr<T>(NonnullOwnPtr<T>::Adopt, *leak_ptr());
     }
 
     template<typename U>
     NonnullOwnPtr<U> release_nonnull()
     {
-        ASSERT(m_ptr);
+        VERIFY(m_ptr);
         return NonnullOwnPtr<U>(NonnullOwnPtr<U>::Adopt, static_cast<U&>(*leak_ptr()));
     }
 
-    T* ptr() { return m_ptr; }
-    const T* ptr() const { return m_ptr; }
+    T* ptr() const { return m_ptr; }
 
-    T* operator->()
+    T* operator->() const
     {
-        ASSERT(m_ptr);
+        VERIFY(m_ptr);
         return m_ptr;
     }
 
-    const T* operator->() const
+    T& operator*() const
     {
-        ASSERT(m_ptr);
-        return m_ptr;
-    }
-
-    T& operator*()
-    {
-        ASSERT(m_ptr);
+        VERIFY(m_ptr);
         return *m_ptr;
     }
 
-    const T& operator*() const
-    {
-        ASSERT(m_ptr);
-        return *m_ptr;
-    }
-
-    operator const T*() const { return m_ptr; }
-    operator T*() { return m_ptr; }
+    operator T*() const { return m_ptr; }
 
     operator bool() { return !!m_ptr; }
 
     void swap(OwnPtr& other)
     {
-        ::swap(m_ptr, other.m_ptr);
+        AK::swap(m_ptr, other.m_ptr);
     }
 
     template<typename U>
     void swap(OwnPtr<U>& other)
     {
-        ::swap(m_ptr, other.m_ptr);
+        AK::swap(m_ptr, other.m_ptr);
+    }
+
+    static OwnPtr lift(T* ptr)
+    {
+        return OwnPtr { ptr };
+    }
+
+protected:
+    explicit OwnPtr(T* ptr)
+        : m_ptr(ptr)
+    {
+        static_assert(
+            requires { requires typename T::AllowOwnPtr()(); } || !requires { requires !typename T::AllowOwnPtr()(); declval<T>().ref(); declval<T>().unref(); }, "Use RefPtr<> for RefCounted types");
     }
 
 private:
@@ -209,18 +185,31 @@ inline void swap(OwnPtr<T>& a, OwnPtr<U>& b)
 }
 
 template<typename T>
-struct Traits<OwnPtr<T>> : public GenericTraits<OwnPtr<T>> {
-    using PeekType = const T*;
-    static unsigned hash(const OwnPtr<T>& p) { return ptr_hash(p.ptr()); }
-    static bool equals(const OwnPtr<T>& a, const OwnPtr<T>& b) { return a.ptr() == b.ptr(); }
+inline OwnPtr<T> adopt_own_if_nonnull(T* object)
+{
+    if (object)
+        return OwnPtr<T>::lift(object);
+    return {};
+}
+
+template<typename T>
+struct Traits<OwnPtr<T>> : public DefaultTraits<OwnPtr<T>> {
+    using PeekType = T*;
+    using ConstPeekType = T const*;
+    static unsigned hash(OwnPtr<T> const& p) { return ptr_hash(p.ptr()); }
+    static bool equals(OwnPtr<T> const& a, OwnPtr<T> const& b) { return a.ptr() == b.ptr(); }
 };
 
 template<typename T>
-inline const LogStream& operator<<(const LogStream& stream, const OwnPtr<T>& value)
-{
-    return stream << value.ptr();
+struct Formatter<OwnPtr<T>> : Formatter<T*> {
+    ErrorOr<void> format(FormatBuilder& builder, OwnPtr<T> const& value)
+    {
+        return Formatter<T*>::format(builder, value.ptr());
+    }
+};
 }
 
-}
-
+#if USING_AK_GLOBALLY
+using AK::adopt_own_if_nonnull;
 using AK::OwnPtr;
+#endif

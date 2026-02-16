@@ -1,31 +1,11 @@
 /*
  * Copyright (c) 2020, Ben Wiederhake <BenWiederhake.GitHub@gmx.de>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <pthread.h>
 #include <assert.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <time.h>
@@ -39,7 +19,7 @@ static void signal_printer(int)
 typedef struct yank_shared_t {
     timespec* remaining_sleep;
     // TODO: Be nice and use thread ID
-    //pthread_t sleeper_thread;
+    // pthread_t sleeper_thread;
 } yank_shared_t;
 
 static void* yanker_fn(void* shared_)
@@ -75,7 +55,6 @@ static void* yanker_fn(void* shared_)
     if (child_pid < 0) {
         printf("Yanker: Fork failed: %d\n", child_pid);
         pthread_exit(nullptr); // See below
-        return nullptr;
     }
 
     if (child_pid > 0) {
@@ -83,7 +62,6 @@ static void* yanker_fn(void* shared_)
         // FIXME: LibPthread bug: returning during normal operation causes nullptr deref.
         // Workaround: Exit manually.
         pthread_exit(nullptr);
-        return nullptr;
     }
 
     // Give parent *thread* a moment to die.
@@ -138,7 +116,7 @@ int main()
     signal(SIGUSR1, signal_printer);
 
     // T1: Go to sleep.
-    const timespec requested_sleep = { 3, 0 };
+    timespec const requested_sleep = { 3, 0 };
     rc = clock_nanosleep(CLOCK_MONOTONIC, 0, &requested_sleep, shared.remaining_sleep);
     // Now we are beyond T4.
 

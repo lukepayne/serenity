@@ -1,108 +1,112 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Max Wipfli <mail@maxwipfli.ch>
+ * Copyright (c) 2023, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/ByteString.h>
+#include <AK/Concepts.h>
+#include <AK/Error.h>
 #include <AK/HashMap.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObjectSerializer.h>
 #include <AK/JsonValue.h>
-#include <AK/String.h>
-#include <AK/StringImpl.h>
 
 namespace AK {
 
 class JsonObject {
+    template<typename Callback>
+    using CallbackErrorType = decltype(declval<Callback>()(declval<ByteString const&>(), declval<JsonValue const&>()))::ErrorType;
+
+    static_assert(SameAs<CallbackErrorType<ErrorOr<void> (*)(ByteString const&, JsonValue const&)>, Error>);
+    static_assert(SameAs<ErrorOr<void, CallbackErrorType<ErrorOr<void> (*)(ByteString const&, JsonValue const&)>>, ErrorOr<void>>);
+
 public:
-    JsonObject() {}
-    ~JsonObject() {}
+    JsonObject();
+    ~JsonObject();
 
-    JsonObject(const JsonObject& other)
-        : m_members(other.m_members)
+    JsonObject(JsonObject const& other);
+    JsonObject(JsonObject&& other);
+
+    JsonObject& operator=(JsonObject const& other);
+    JsonObject& operator=(JsonObject&& other);
+
+    [[nodiscard]] size_t size() const;
+    [[nodiscard]] bool is_empty() const;
+
+    [[nodiscard]] bool has(StringView key) const;
+
+    [[nodiscard]] bool has_null(StringView key) const;
+    [[nodiscard]] bool has_bool(StringView key) const;
+    [[nodiscard]] bool has_string(StringView key) const;
+    [[nodiscard]] bool has_i8(StringView key) const;
+    [[nodiscard]] bool has_u8(StringView key) const;
+    [[nodiscard]] bool has_i16(StringView key) const;
+    [[nodiscard]] bool has_u16(StringView key) const;
+    [[nodiscard]] bool has_i32(StringView key) const;
+    [[nodiscard]] bool has_u32(StringView key) const;
+    [[nodiscard]] bool has_i64(StringView key) const;
+    [[nodiscard]] bool has_u64(StringView key) const;
+    [[nodiscard]] bool has_number(StringView key) const;
+    [[nodiscard]] bool has_array(StringView key) const;
+    [[nodiscard]] bool has_object(StringView key) const;
+
+    Optional<JsonValue const&> get(StringView key) const;
+
+    template<Integral T>
+    Optional<T> get_integer(StringView key) const
     {
+        auto maybe_value = get(key);
+        if (maybe_value.has_value() && maybe_value->is_integer<T>())
+            return maybe_value->as_integer<T>();
+        return {};
     }
 
-    JsonObject(JsonObject&& other)
-        : m_members(move(other.m_members))
-    {
-    }
+    Optional<i8> get_i8(StringView key) const;
+    Optional<u8> get_u8(StringView key) const;
+    Optional<i16> get_i16(StringView key) const;
+    Optional<u16> get_u16(StringView key) const;
+    Optional<i32> get_i32(StringView key) const;
+    Optional<u32> get_u32(StringView key) const;
+    Optional<i64> get_i64(StringView key) const;
+    Optional<u64> get_u64(StringView key) const;
+    Optional<FlatPtr> get_addr(StringView key) const;
+    Optional<bool> get_bool(StringView key) const;
 
-    JsonObject& operator=(const JsonObject& other)
-    {
-        if (this != &other)
-            m_members = other.m_members;
-        return *this;
-    }
+#if !defined(KERNEL)
+    Optional<ByteString> get_byte_string(StringView key) const;
+#endif
 
-    JsonObject& operator=(JsonObject&& other)
-    {
-        if (this != &other)
-            m_members = move(other.m_members);
-        return *this;
-    }
+    Optional<JsonObject const&> get_object(StringView key) const;
+    Optional<JsonArray const&> get_array(StringView key) const;
 
-    int size() const { return m_members.size(); }
-    bool is_empty() const { return m_members.is_empty(); }
+#if !defined(KERNEL)
+    Optional<double> get_double_with_precision_loss(StringView key) const;
+    Optional<float> get_float_with_precision_loss(StringView key) const;
+#endif
 
-    JsonValue get(const String& key) const
-    {
-        auto* value = get_ptr(key);
-        return value ? *value : JsonValue(JsonValue::Type::Undefined);
-    }
-
-    JsonValue get_or(const String& key, JsonValue alternative) const
-    {
-        auto* value = get_ptr(key);
-        return value ? *value : alternative;
-    }
-
-    const JsonValue* get_ptr(const String& key) const
-    {
-        auto it = m_members.find(key);
-        if (it == m_members.end())
-            return nullptr;
-        return &(*it).value;
-    }
-
-    bool has(const String& key) const
-    {
-        return m_members.contains(key);
-    }
-
-    void set(const String& key, JsonValue value)
-    {
-        m_members.set(key, move(value));
-    }
+    void set(ByteString const& key, JsonValue value);
 
     template<typename Callback>
     void for_each_member(Callback callback) const
     {
-        for (auto& it : m_members)
-            callback(it.key, it.value);
+        for (auto const& member : m_members)
+            callback(member.key, member.value);
     }
+
+    template<FallibleFunction<ByteString const&, JsonValue const&> Callback>
+    ErrorOr<void, CallbackErrorType<Callback>> try_for_each_member(Callback&& callback) const
+    {
+        for (auto const& member : m_members)
+            TRY(callback(member.key, member.value));
+        return {};
+    }
+
+    bool remove(StringView key);
 
     template<typename Builder>
     typename Builder::OutputType serialized() const;
@@ -110,19 +114,20 @@ public:
     template<typename Builder>
     void serialize(Builder&) const;
 
-    String to_string() const { return serialized<StringBuilder>(); }
+    [[nodiscard]] ByteString to_byte_string() const;
 
 private:
-    HashMap<String, JsonValue> m_members;
+    OrderedHashMap<ByteString, JsonValue> m_members;
 };
 
 template<typename Builder>
 inline void JsonObject::serialize(Builder& builder) const
 {
-    JsonObjectSerializer serializer { builder };
+    auto serializer = MUST(JsonObjectSerializer<>::try_create(builder));
     for_each_member([&](auto& key, auto& value) {
-        serializer.add(key, value);
+        MUST(serializer.add(key, value));
     });
+    MUST(serializer.finish());
 }
 
 template<typename Builder>
@@ -130,78 +135,24 @@ inline typename Builder::OutputType JsonObject::serialized() const
 {
     Builder builder;
     serialize(builder);
-    return builder.build();
+    return builder.to_byte_string();
 }
 
 template<typename Builder>
 inline void JsonValue::serialize(Builder& builder) const
 {
-    switch (m_type) {
-    case Type::String: {
-        auto size = m_value.as_string->length();
-        builder.append("\"");
-        for (size_t i = 0; i < size; i++) {
-            char ch = m_value.as_string->characters()[i];
-            switch (ch) {
-            case '\e':
-                builder.append("\\u001B");
-                break;
-            case '\b':
-                builder.append("\\b");
-                break;
-            case '\n':
-                builder.append("\\n");
-                break;
-            case '\t':
-                builder.append("\\t");
-                break;
-            case '\"':
-                builder.append("\\\"");
-                break;
-            case '\\':
-                builder.append("\\\\");
-                break;
-            default:
-                builder.appendf("%c", ch);
-            }
-        }
-        builder.append("\"");
-    } break;
-    case Type::Array:
-        m_value.as_array->serialize(builder);
-        break;
-    case Type::Object:
-        m_value.as_object->serialize(builder);
-        break;
-    case Type::Bool:
-        builder.append(m_value.as_bool ? "true" : "false");
-        break;
-#if !defined(KERNEL)
-    case Type::Double:
-        builder.appendf("%g", m_value.as_double);
-        break;
-#endif
-    case Type::Int32:
-        builder.appendf("%d", as_i32());
-        break;
-    case Type::Int64:
-        builder.appendf("%lld", as_i64());
-        break;
-    case Type::UnsignedInt32:
-        builder.appendf("%u", as_u32());
-        break;
-    case Type::UnsignedInt64:
-        builder.appendf("%llu", as_u64());
-        break;
-    case Type::Undefined:
-        builder.append("undefined");
-        break;
-    case Type::Null:
-        builder.append("null");
-        break;
-    default:
-        ASSERT_NOT_REACHED();
-    }
+    m_value.visit(
+        [&](Empty const&) { builder.append("null"sv); },
+        [&](bool const& value) { builder.append(value ? "true"sv : "false"sv); },
+        [&](Arithmetic auto const& value) { builder.appendff("{}", value); },
+        [&](ByteString const& value) {
+            builder.append('\"');
+            builder.append_escaped_for_json(value.bytes());
+            builder.append('\"');
+        },
+        [&](auto const& array_or_object) {
+            array_or_object->serialize(builder);
+        });
 }
 
 template<typename Builder>
@@ -209,9 +160,11 @@ inline typename Builder::OutputType JsonValue::serialized() const
 {
     Builder builder;
     serialize(builder);
-    return builder.build();
+    return builder.to_byte_string();
 }
 
 }
 
+#if USING_AK_GLOBALLY
 using AK::JsonObject;
+#endif

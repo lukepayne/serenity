@@ -1,34 +1,49 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/IPv4Address.h>
+#include <AK/IPv6Address.h>
+#include <AK/RefPtr.h>
+#include <Kernel/Locking/MutexProtected.h>
 #include <Kernel/Net/NetworkAdapter.h>
+#include <Kernel/Tasks/Thread.h>
 
 namespace Kernel {
+
+struct Route final : public AtomicRefCounted<Route> {
+    Route(IPv4Address const& destination, IPv4Address const& gateway, IPv4Address const& netmask, u16 flags, NonnullRefPtr<NetworkAdapter> adapter)
+        : destination(destination)
+        , gateway(gateway)
+        , netmask(netmask)
+        , flags(flags)
+        , adapter(adapter)
+    {
+    }
+
+    bool operator==(Route const& other) const
+    {
+        return destination == other.destination && netmask == other.netmask && flags == other.flags && adapter.ptr() == other.adapter.ptr();
+    }
+
+    bool matches(Route const& other) const
+    {
+        return destination == other.destination && (gateway == other.gateway || other.gateway.is_zero()) && netmask == other.netmask && flags == other.flags && adapter.ptr() == other.adapter.ptr();
+    }
+
+    IPv4Address const destination;
+    IPv4Address const gateway;
+    IPv4Address const netmask;
+    u16 const flags;
+    NonnullRefPtr<NetworkAdapter> const adapter;
+
+    IntrusiveListNode<Route, RefPtr<Route>> route_list_node {};
+    using RouteList = IntrusiveList<&Route::route_list_node>;
+};
 
 struct RoutingDecision {
     RefPtr<NetworkAdapter> adapter;
@@ -37,8 +52,27 @@ struct RoutingDecision {
     bool is_zero() const;
 };
 
-RoutingDecision route_to(const IPv4Address& target, const IPv4Address& source, const RefPtr<NetworkAdapter> through = nullptr);
+enum class UpdateTable {
+    Set,
+    Delete,
+};
 
-Lockable<HashMap<IPv4Address, MACAddress>>& arp_table();
+void update_arp_table(IPv4Address const&, MACAddress const&, UpdateTable update);
+ErrorOr<void> update_routing_table(IPv4Address const& destination, IPv4Address const& gateway, IPv4Address const& netmask, u16 flags, RefPtr<NetworkAdapter> const adapter, UpdateTable update);
+
+enum class AllowUsingGateway {
+    Yes,
+    No,
+};
+
+enum class AllowBroadcast {
+    Yes,
+    No,
+};
+
+RoutingDecision route_to(IPv4Address const& target, IPv4Address const& source, RefPtr<NetworkAdapter> const through = nullptr, AllowBroadcast = AllowBroadcast::No, AllowUsingGateway = AllowUsingGateway::Yes);
+
+SpinlockProtected<HashMap<IPv4Address, MACAddress>, LockRank::None>& arp_table();
+SpinlockProtected<Route::RouteList, LockRank::None>& routing_table();
 
 }

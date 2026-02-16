@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Peter Elliott <pelliott@ualberta.ca>
+Date: Sat, 11 Feb 2023 14:58:38 -0700
+Subject: [PATCH] Don't use CMSG_CLOEXEC
+
+---
+ meson.build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index 3b9c66693b1028bdd738d7d09284000582d597ce..cf09e11f7065c06949849ba8d8a2849751b82ea0 100644
+--- a/meson.build
++++ b/meson.build
+@@ -51,7 +51,7 @@ foreach f: have_funcs
+ 	config_h.set('HAVE_' + f.underscorify().to_upper(), cc.has_function(f))
+ endforeach
+ config_h.set10('HAVE_XUCRED_CR_PID', cc.has_member('struct xucred', 'cr_pid', prefix : '#include <sys/ucred.h>'))
+-have_broken_msg_cmsg_cloexec = false
++have_broken_msg_cmsg_cloexec = true
+ if host_machine.system() == 'freebsd'
+ 	have_broken_msg_cmsg_cloexec = not cc.compiles('''
+ #include <sys/param.h> /* To get __FreeBSD_version. */

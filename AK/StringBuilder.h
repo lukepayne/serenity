@@ -1,83 +1,123 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/Format.h>
 #include <AK/Forward.h>
+#include <AK/StringView.h>
 #include <stdarg.h>
 
 namespace AK {
 
 class StringBuilder {
 public:
-    using OutputType = String;
+    static constexpr size_t inline_capacity = 256;
 
-    explicit StringBuilder(size_t initial_capacity = 16);
-    ~StringBuilder() {}
+    using OutputType = ByteString;
 
-    void append(const StringView&);
-    void append(const Utf32View&);
+    static ErrorOr<StringBuilder> create(size_t initial_capacity = inline_capacity);
+
+    explicit StringBuilder(size_t initial_capacity = inline_capacity);
+
+    enum class UseInlineCapacityOnly {
+        Yes,
+        No,
+    };
+    explicit StringBuilder(UseInlineCapacityOnly use_inline_capacity_only);
+    ~StringBuilder() = default;
+
+    ErrorOr<void> try_append(StringView);
+#ifndef KERNEL
+    ErrorOr<void> try_append(Utf16View const&);
+#endif
+    ErrorOr<void> try_append(Utf32View const&);
+    ErrorOr<void> try_append_code_point(u32);
+    ErrorOr<void> try_append(char);
+    template<typename... Parameters>
+    ErrorOr<void> try_appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
+    {
+        VariadicFormatParams<AllowDebugOnlyFormatters::No, Parameters...> variadic_format_params { parameters... };
+        return vformat(*this, fmtstr.view(), variadic_format_params);
+    }
+    ErrorOr<void> try_append(char const*, size_t);
+    ErrorOr<void> try_append_repeated(char, size_t);
+    ErrorOr<void> try_append_escaped_for_json(StringView);
+
+    void append(StringView);
+#ifndef KERNEL
+    void append(Utf16View const&);
+#endif
+    void append(Utf32View const&);
     void append(char);
-    void append_codepoint(u32);
-    void append(const char*, size_t);
-    void appendf(const char*, ...);
-    void appendvf(const char*, va_list);
+    void append_code_point(u32);
+    void append(char const*, size_t);
+    void appendvf(char const*, va_list);
+    void append_repeated(char, size_t);
 
-    String build() const;
-    String to_string() const;
-    ByteBuffer to_byte_buffer() const;
+    void append_as_lowercase(char);
+    void append_escaped_for_json(StringView);
 
-    StringView string_view() const;
+    template<typename... Parameters>
+    void appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
+    {
+        VariadicFormatParams<AllowDebugOnlyFormatters::No, Parameters...> variadic_format_params { parameters... };
+        MUST(vformat(*this, fmtstr.view(), variadic_format_params));
+    }
+
+#ifndef KERNEL
+    [[nodiscard]] ByteString to_byte_string() const;
+#endif
+
+    [[nodiscard]] String to_string_without_validation() const;
+    ErrorOr<String> to_string() const;
+
+    [[nodiscard]] FlyString to_fly_string_without_validation() const;
+    ErrorOr<FlyString> to_fly_string() const;
+
+    [[nodiscard]] ErrorOr<ByteBuffer> to_byte_buffer() const;
+
+    [[nodiscard]] StringView string_view() const;
     void clear();
 
-    size_t length() const { return m_length; }
-    bool is_empty() const { return m_length == 0; }
-    void trim(size_t count) { m_length -= count; }
+    [[nodiscard]] size_t length() const;
+    [[nodiscard]] bool is_empty() const;
+    void trim(size_t count);
 
     template<class SeparatorType, class CollectionType>
-    void join(const SeparatorType& separator, const CollectionType& collection)
+    void join(SeparatorType const& separator, CollectionType const& collection, StringView fmtstr = "{}"sv)
+    {
+        MUST(try_join(separator, collection, fmtstr));
+    }
+
+    template<class SeparatorType, class CollectionType>
+    ErrorOr<void> try_join(SeparatorType const& separator, CollectionType const& collection, StringView fmtstr = "{}"sv)
     {
         bool first = true;
         for (auto& item : collection) {
-            if (first)
-                first = false;
-            else
-                append(separator);
-            append(item);
+            if (!first)
+                TRY(try_append(separator));
+            TRY(try_appendff(fmtstr, item));
+            first = false;
         }
+        return {};
     }
 
 private:
-    void will_append(size_t);
+    ErrorOr<void> will_append(size_t);
+    u8* data();
+    u8 const* data() const;
 
-    ByteBuffer m_buffer;
-    size_t m_length { 0 };
+    UseInlineCapacityOnly m_use_inline_capacity_only { UseInlineCapacityOnly::No };
+    Detail::ByteBuffer<inline_capacity> m_buffer;
 };
 
 }
 
+#if USING_AK_GLOBALLY
 using AK::StringBuilder;
+#endif

@@ -1,64 +1,52 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Demangle.h>
+#include <AK/StackUnwinder.h>
 #include <AK/TemporaryChange.h>
-#include <Kernel/FileSystem/FileDescription.h>
+#include <Kernel/Arch/SafeMem.h>
+#include <Kernel/Arch/SmapDisabler.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/KSyms.h>
-#include <Kernel/Process.h>
-#include <Kernel/Scheduler.h>
-#include <LibELF/Loader.h>
+#include <Kernel/Sections.h>
+#include <Kernel/Tasks/Process.h>
+#include <Kernel/Tasks/Scheduler.h>
+#include <Kernel/kstdio.h>
 
 namespace Kernel {
 
 FlatPtr g_lowest_kernel_symbol_address = 0xffffffff;
 FlatPtr g_highest_kernel_symbol_address = 0;
-bool g_kernel_symbols_available = false;
+SetOnce g_kernel_symbols_available;
+
+extern "C" {
+__attribute__((section(".kernel_symbols"))) char kernel_symbols[8 * MiB] {};
+}
 
 static KernelSymbol* s_symbols;
 static size_t s_symbol_count = 0;
 
-static u8 parse_hex_digit(char nibble)
+UNMAP_AFTER_INIT static u8 parse_hex_digit(char nibble)
 {
     if (nibble >= '0' && nibble <= '9')
         return nibble - '0';
-    ASSERT(nibble >= 'a' && nibble <= 'f');
+    VERIFY(nibble >= 'a' && nibble <= 'f');
     return 10 + (nibble - 'a');
 }
 
-u32 address_for_kernel_symbol(const StringView& name)
+FlatPtr address_for_kernel_symbol(StringView name)
 {
     for (size_t i = 0; i < s_symbol_count; ++i) {
-        if (!strncmp(name.characters_without_null_termination(), s_symbols[i].name, name.length()))
-            return s_symbols[i].address;
+        auto const& symbol = s_symbols[i];
+        if (name == symbol.name)
+            return symbol.address;
     }
     return 0;
 }
 
-const KernelSymbol* symbolicate_kernel_address(u32 address)
+KernelSymbol const* symbolicate_kernel_address(FlatPtr address)
 {
     if (address < g_lowest_kernel_symbol_address || address > g_highest_kernel_symbol_address)
         return nullptr;
@@ -69,26 +57,26 @@ const KernelSymbol* symbolicate_kernel_address(u32 address)
     return nullptr;
 }
 
-static void load_kernel_sybols_from_data(const ByteBuffer& buffer)
+UNMAP_AFTER_INIT static void load_kernel_symbols_from_data(Bytes buffer)
 {
     g_lowest_kernel_symbol_address = 0xffffffff;
     g_highest_kernel_symbol_address = 0;
 
-    auto* bufptr = (const char*)buffer.data();
+    auto* bufptr = (char*)buffer.data();
     auto* start_of_name = bufptr;
     FlatPtr address = 0;
 
     for (size_t i = 0; i < 8; ++i)
         s_symbol_count = (s_symbol_count << 4) | parse_hex_digit(*(bufptr++));
-    s_symbols = static_cast<KernelSymbol*>(kmalloc_eternal(sizeof(KernelSymbol) * s_symbol_count));
+    s_symbols = static_cast<KernelSymbol*>(kmalloc(sizeof(KernelSymbol) * s_symbol_count));
     ++bufptr; // skip newline
 
-    klog() << "Loading kernel symbol table...";
+    dmesgln("Loading kernel symbol table...");
 
     size_t current_symbol_index = 0;
 
-    while (bufptr < buffer.end_pointer()) {
-        for (size_t i = 0; i < 8; ++i)
+    while ((u8 const*)bufptr < buffer.data() + buffer.size()) {
+        for (size_t i = 0; i < sizeof(void*) * 2; ++i)
             address = (address << 4) | parse_hex_digit(*(bufptr++));
         bufptr += 3;
         start_of_name = bufptr;
@@ -98,11 +86,11 @@ static void load_kernel_sybols_from_data(const ByteBuffer& buffer)
             }
         }
         auto& ksym = s_symbols[current_symbol_index];
-        ksym.address = address;
-        char* name = static_cast<char*>(kmalloc_eternal((bufptr - start_of_name) + 1));
-        memcpy(name, start_of_name, bufptr - start_of_name);
-        name[bufptr - start_of_name] = '\0';
-        ksym.name = name;
+
+        ksym.address = g_boot_info.kernel_load_base + address;
+        ksym.name = start_of_name;
+
+        *bufptr = '\0';
 
         if (ksym.address < g_lowest_kernel_symbol_address)
             g_lowest_kernel_symbol_address = ksym.address;
@@ -112,90 +100,115 @@ static void load_kernel_sybols_from_data(const ByteBuffer& buffer)
         ++bufptr;
         ++current_symbol_index;
     }
-    g_kernel_symbols_available = true;
+    g_kernel_symbols_available.set();
 }
 
-NEVER_INLINE void dump_backtrace_impl(FlatPtr base_pointer, bool use_ksyms)
+NEVER_INLINE static void dump_backtrace_impl(FlatPtr frame_pointer, bool use_ksyms, PrintToScreen print_to_screen)
 {
-    SmapDisabler disabler;
-#if 0
-    if (!current) {
-        //hang();
-        return;
-    }
-#endif
-    if (use_ksyms && !g_kernel_symbols_available) {
-        hang();
-        return;
-    }
+#define PRINT_LINE(string, length)                \
+    do {                                          \
+        if (print_to_screen == PrintToScreen::No) \
+            dbgputstr(string, length);            \
+        else                                      \
+            kernelcriticalputstr(string, length); \
+    } while (0)
 
-    OwnPtr<Process::ELFBundle> elf_bundle;
-    if (Process::current)
-        elf_bundle = Process::current->elf_bundle();
+    SmapDisabler disabler;
+    if (use_ksyms && !g_kernel_symbols_available.was_set())
+        Processor::halt();
 
     struct RecognizedSymbol {
         FlatPtr address;
-        const KernelSymbol* symbol { nullptr };
+        KernelSymbol const* symbol { nullptr };
     };
-    size_t max_recognized_symbol_count = 256;
+
+    constexpr size_t max_recognized_symbol_count = 256;
     RecognizedSymbol recognized_symbols[max_recognized_symbol_count];
     size_t recognized_symbol_count = 0;
-    if (use_ksyms) {
-        for (FlatPtr* stack_ptr = (FlatPtr*)base_pointer;
-             (Process::current ? Process::current->validate_read_from_kernel(VirtualAddress(stack_ptr), sizeof(void*) * 2) : 1) && recognized_symbol_count < max_recognized_symbol_count; stack_ptr = (FlatPtr*)*stack_ptr) {
-            FlatPtr retaddr = stack_ptr[1];
-            recognized_symbols[recognized_symbol_count++] = { retaddr, symbolicate_kernel_address(retaddr) };
-        }
-    } else {
-        for (FlatPtr* stack_ptr = (FlatPtr*)base_pointer;
-             (Process::current ? Process::current->validate_read_from_kernel(VirtualAddress(stack_ptr), sizeof(void*) * 2) : 1); stack_ptr = (FlatPtr*)*stack_ptr) {
-            FlatPtr retaddr = stack_ptr[1];
-            dbg() << String::format("%x", retaddr) << " (next: " << String::format("%x", (stack_ptr ? (u32*)*stack_ptr : 0)) << ")";
-        }
+
+    MUST(AK::unwind_stack_from_frame_pointer(
+        frame_pointer,
+        [](FlatPtr address) -> ErrorOr<FlatPtr> {
+            if (address < g_boot_info.kernel_mapping_base)
+                return EINVAL;
+
+            FlatPtr value;
+            void* fault_at;
+            if (!safe_memcpy(&value, bit_cast<FlatPtr*>(address), sizeof(FlatPtr), fault_at))
+                return EFAULT;
+
+            return value;
+        },
+        [use_ksyms, print_to_screen, &recognized_symbol_count, &recognized_symbols](AK::StackFrame stack_frame) -> ErrorOr<IterationDecision> {
+            if (use_ksyms) {
+                if (recognized_symbol_count >= max_recognized_symbol_count)
+                    return IterationDecision::Break;
+
+                recognized_symbols[recognized_symbol_count++] = { stack_frame.return_address, symbolicate_kernel_address(stack_frame.return_address) };
+            } else {
+                auto message_buffer = MUST(FixedStringBuffer<19>::formatted("{:p}"sv, stack_frame.return_address));
+                auto message = message_buffer.representable_view();
+                PRINT_LINE(message.characters_without_null_termination(), message.length());
+            }
+            return IterationDecision::Continue;
+        }));
+
+    if (!use_ksyms)
         return;
-    }
-    ASSERT(recognized_symbol_count <= max_recognized_symbol_count);
+
+    VERIFY(recognized_symbol_count <= max_recognized_symbol_count);
     for (size_t i = 0; i < recognized_symbol_count; ++i) {
         auto& symbol = recognized_symbols[i];
         if (!symbol.address)
             break;
         if (!symbol.symbol) {
-            if (elf_bundle && elf_bundle->elf_loader->has_symbols()) {
-                dbg() << String::format("%p", symbol.address) << "  " << elf_bundle->elf_loader->symbolicate(symbol.address);
-            } else {
-                dbg() << String::format("%p", symbol.address) << " (no ELF symbols for process)";
-            }
+            auto message_buffer = MUST(FixedStringBuffer<28>::formatted("Kernel + {:p}\n"sv, symbol.address - g_boot_info.kernel_load_base));
+            auto message = message_buffer.representable_view();
+            PRINT_LINE(message.characters_without_null_termination(), message.length());
             continue;
         }
         size_t offset = symbol.address - symbol.symbol->address;
-        if (symbol.symbol->address == g_highest_kernel_symbol_address && offset > 4096)
-            dbg() << String::format("%p", symbol.address);
-        else
-            dbg() << String::format("%p", symbol.address) << "  " << demangle(symbol.symbol->name) << " +" << offset;
+        if (symbol.symbol->address == g_highest_kernel_symbol_address && offset > 4096) {
+            auto message_buffer = MUST(FixedStringBuffer<28>::formatted("Kernel + {:p}\n"sv, symbol.address - g_boot_info.kernel_load_base));
+            auto message = message_buffer.representable_view();
+            PRINT_LINE(message.characters_without_null_termination(), message.length());
+        } else {
+            constexpr auto buffer_size = 255;
+            constexpr auto maximum_printable_name_length = buffer_size - (sizeof("Kernel + 0x   +\n") - 1 + sizeof(FlatPtr) * 4);
+            size_t symbol_name_length = strlen(symbol.symbol->name);
+            auto symbol_name = StringView(symbol.symbol->name, min(symbol_name_length, maximum_printable_name_length));
+            auto message_buffer = MUST(FixedStringBuffer<buffer_size>::formatted("Kernel + {:p}  {} +{:#x}\n"sv, symbol.address - g_boot_info.kernel_load_base, symbol_name, offset));
+            auto message = message_buffer.representable_view();
+            PRINT_LINE(message.characters_without_null_termination(), message.length());
+        }
     }
 }
 
-void dump_backtrace()
+void dump_backtrace_from_base_pointer(FlatPtr base_pointer)
+{
+    // FIXME: Change signature of dump_backtrace_impl to use an enum instead of a bool.
+    dump_backtrace_impl(base_pointer, /*use_ksym=*/false, PrintToScreen::No);
+}
+
+void dump_backtrace(PrintToScreen print_to_screen)
 {
     static bool in_dump_backtrace = false;
     if (in_dump_backtrace)
         return;
     TemporaryChange change(in_dump_backtrace, true);
     TemporaryChange disable_kmalloc_stacks(g_dump_kmalloc_stacks, false);
-    FlatPtr ebp;
-    asm volatile("movl %%ebp, %%eax"
-                 : "=a"(ebp));
-    dump_backtrace_impl(ebp, g_kernel_symbols_available);
+
+    FlatPtr base_pointer = (FlatPtr)__builtin_frame_address(0);
+    dump_backtrace_impl(base_pointer, g_kernel_symbols_available.was_set(), print_to_screen);
 }
 
-void load_kernel_symbol_table()
+UNMAP_AFTER_INIT void load_kernel_symbol_table()
 {
-    auto result = VFS::the().open("/res/kernel.map", O_RDONLY, 0, VFS::the().root_custody());
-    ASSERT(!result.is_error());
-    auto description = result.value();
-    auto buffer = description->read_entire_file();
-    ASSERT(!buffer.is_error());
-    load_kernel_sybols_from_data(buffer.value());
+    auto kernel_symbols_size = strnlen(kernel_symbols, sizeof(kernel_symbols));
+    // If we're hitting this VERIFY the kernel symbol file has grown beyond
+    // the array size of kernel_symbols. Try making the array larger.
+    VERIFY(kernel_symbols_size != sizeof(kernel_symbols));
+    load_kernel_symbols_from_data({ kernel_symbols, kernel_symbols_size });
 }
 
 }

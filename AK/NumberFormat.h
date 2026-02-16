@@ -1,53 +1,39 @@
 /*
- * Copyright (c) 2020, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2020-2022, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/Forward.h>
 #include <AK/String.h>
 
 namespace AK {
 
-static String number_string_with_one_decimal(float number, const char* suffix)
-{
-    float decimals = number - (int)number;
-    return String::format("%d.%d %s", (int)number, (int)(decimals * 10), suffix);
+enum class HumanReadableBasedOn {
+    Base2,
+    Base10
+};
+
+enum class UseThousandsSeparator {
+    Yes,
+    No
+};
+
+String human_readable_size(u64 size, HumanReadableBasedOn based_on = HumanReadableBasedOn::Base2, UseThousandsSeparator use_thousands_separator = UseThousandsSeparator::No);
+String human_readable_quantity(u64 quantity, HumanReadableBasedOn based_on = HumanReadableBasedOn::Base2, StringView unit = "B"sv, UseThousandsSeparator use_thousands_separator = UseThousandsSeparator::No);
+
+String human_readable_size_long(u64 size, UseThousandsSeparator use_thousands_separator = UseThousandsSeparator::No);
+String human_readable_time(i64 time_in_seconds);
+String human_readable_digital_time(i64 time_in_seconds);
+
 }
 
-static String human_readable_size(size_t size)
-{
-    if (size < 1 * KB)
-        return String::format("%zu bytes", size);
-    if (size < 1 * MB)
-        return number_string_with_one_decimal((float)size / (float)KB, "KB");
-    if (size < 1 * GB)
-        return number_string_with_one_decimal((float)size / (float)MB, "MB");
-    return number_string_with_one_decimal((float)size / (float)GB, "GB");
-}
-
-}
-
-using namespace AK;
+#if USING_AK_GLOBALLY
+using AK::human_readable_digital_time;
+using AK::human_readable_quantity;
+using AK::human_readable_size;
+using AK::human_readable_size_long;
+using AK::human_readable_time;
+using AK::UseThousandsSeparator;
+#endif

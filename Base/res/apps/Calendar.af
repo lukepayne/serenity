@@ -1,8 +1,7 @@
 [App]
-Name=Calendar
+Name=&Calendar
 Executable=/bin/Calendar
-Category=Utilities
+Category=&Office
 
-[Icons]
-16x16=/res/icons/16x16/app-calendar.png
-32x32=
+[Launcher]
+FileTypes=cal

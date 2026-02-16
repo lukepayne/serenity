@@ -1,80 +1,124 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/FixedArray.h>
-#include <AK/NonnullRefPtrVector.h>
-#include <AK/RefPtr.h>
+#include <AK/Error.h>
+#include <AK/OwnPtr.h>
+#include <AK/Platform.h>
+#include <AK/SetOnce.h>
+#include <AK/Time.h>
 #include <AK/Types.h>
+#include <AK/Vector.h>
+#include <Kernel/API/TimePage.h>
+#include <Kernel/Forward.h>
+#include <Kernel/Library/LockRefPtr.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
 
-#define OPTIMAL_TICKS_PER_SECOND_RATE 1000
+#define OPTIMAL_TICKS_PER_SECOND_RATE 250
+#define OPTIMAL_PROFILE_TICKS_PER_SECOND_RATE 1000
 
-class HardwareTimer;
+class HardwareTimerBase;
+
+enum class TimePrecision {
+    Coarse = 0,
+    Precise
+};
 
 class TimeManagement {
-    AK_MAKE_ETERNAL;
 
 public:
-    static bool initialized();
-    static void initialize();
+    TimeManagement();
+    static void initialize(u32 cpu);
+    static bool is_initialized();
     static TimeManagement& the();
 
-    time_t epoch_time() const;
-    void set_epoch_time(time_t);
-    time_t seconds_since_boot() const;
+    static ErrorOr<void> register_hardware_timer(NonnullLockRefPtr<HardwareTimerBase>);
+
+    static u64 scheduler_current_time();
+
+    static ErrorOr<void> validate_clock_id(clockid_t);
+    // This API cannot distinguish returned time types; prefer the clock-specific functions instead.
+    Duration current_time(clockid_t) const;
+    MonotonicTime monotonic_time(TimePrecision = TimePrecision::Coarse) const;
+    MonotonicTime monotonic_time_raw() const
+    {
+        // TODO: implement
+        return monotonic_time(TimePrecision::Precise);
+    }
+    UnixDateTime epoch_time(TimePrecision = TimePrecision::Precise) const;
+    void set_epoch_time(UnixDateTime);
     time_t ticks_per_second() const;
-    time_t ticks_this_second() const;
-    time_t boot_time() const;
+    static UnixDateTime boot_time();
+    Duration clock_resolution() const;
 
-    bool is_system_timer(const HardwareTimer&) const;
+    bool is_system_timer(HardwareTimerBase const&) const;
 
-    static void update_time(const RegisterState&);
-    void increment_time_since_boot(const RegisterState&);
+    void increment_time_since_boot();
 
     static bool is_hpet_periodic_mode_allowed();
 
-    static timeval now_as_timeval();
+    bool enable_profile_timer();
+    bool disable_profile_timer();
+
+    u64 uptime_ms() const;
+    static UnixDateTime now();
+
+    // FIXME: Most likely broken, because it does not check m_update[12] for in-progress updates.
+    Duration remaining_epoch_time_adjustment() const { return m_remaining_epoch_time_adjustment; }
+    // FIXME: Most likely broken, because it does not check m_update[12] for in-progress updates.
+    void set_remaining_epoch_time_adjustment(Duration adjustment) { m_remaining_epoch_time_adjustment = adjustment; }
+
+    bool can_query_precise_time() const { return m_can_query_precise_time.was_set(); }
+
+    Memory::VMObject& time_page_vmobject();
 
 private:
-    explicit TimeManagement(bool probe_non_legacy_hardware_timers);
-    bool probe_and_set_legacy_hardware_timers();
-    bool probe_and_set_non_legacy_hardware_timers();
-    Vector<HardwareTimer*> scan_and_initialize_periodic_timers();
-    Vector<HardwareTimer*> scan_for_non_periodic_timers();
-    NonnullRefPtrVector<HardwareTimer> m_hardware_timers;
+    TimePage& time_page();
+    void update_time_page();
 
+#if ARCH(X86_64)
+    bool probe_and_set_x86_legacy_hardware_timers();
+    bool probe_and_set_x86_non_legacy_hardware_timers();
+    void increment_time_since_boot_hpet();
+    static void update_time();
+#elif ARCH(AARCH64)
+    bool probe_and_set_aarch64_hardware_timers();
+#elif ARCH(RISCV64)
+    bool probe_and_set_riscv64_hardware_timers();
+#else
+#    error Unknown architecture
+#endif
+    Vector<HardwareTimerBase*> scan_and_initialize_periodic_timers();
+    Vector<HardwareTimerBase*> scan_for_non_periodic_timers();
+    void set_system_timer(HardwareTimerBase&);
+    static void system_timer_tick();
+
+    // Variables between m_update1 and m_update2 are synchronized
+    // FIXME: Replace m_update1 and m_update2 with a SpinlockLocker
+    Atomic<u32> m_update1 { 0 };
     u32 m_ticks_this_second { 0 };
-    u32 m_seconds_since_boot { 0 };
-    time_t m_epoch_time { 0 };
-    RefPtr<HardwareTimer> m_system_timer;
-    RefPtr<HardwareTimer> m_time_keeper_timer;
+    u64 m_seconds_since_boot { 0 };
+    UnixDateTime m_epoch_time {};
+    Duration m_remaining_epoch_time_adjustment {};
+    Atomic<u32> m_update2 { 0 };
+
+    u32 m_time_ticks_per_second { 0 }; // may be different from interrupts/second (e.g. hpet)
+    SetOnce m_can_query_precise_time;
+    bool m_updating_time { false }; // may only be accessed from the BSP!
+
+    LockRefPtr<HardwareTimerBase> m_system_timer;
+    LockRefPtr<HardwareTimerBase> m_time_keeper_timer;
+
+    Atomic<u32> m_profile_enable_count { 0 };
+    LockRefPtr<HardwareTimerBase> m_profile_timer;
+
+    NonnullOwnPtr<Memory::Region> m_time_page_region;
 };
 
 }

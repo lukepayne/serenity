@@ -1,103 +1,258 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Assertions.h>
 #include <AK/Checked.h>
+#include <AK/Concepts.h>
+#include <AK/EnumBits.h>
 #include <AK/Forward.h>
+#include <AK/Optional.h>
+#include <AK/Span.h>
 #include <AK/StdLibExtras.h>
+#include <AK/StringHash.h>
 #include <AK/StringUtils.h>
 
 namespace AK {
 
 class StringView {
 public:
-    using ConstIterator = const char*;
-
-    ALWAYS_INLINE constexpr StringView() { }
-    ALWAYS_INLINE constexpr StringView(const char* characters, size_t length)
+    ALWAYS_INLINE constexpr StringView() = default;
+    ALWAYS_INLINE constexpr StringView(char const* characters, size_t length)
         : m_characters(characters)
         , m_length(length)
     {
-        ASSERT(!Checked<uintptr_t>::addition_would_overflow((uintptr_t)characters, length));
+        if (!is_constant_evaluated())
+            VERIFY(!Checked<uintptr_t>::addition_would_overflow(reinterpret_cast<uintptr_t>(characters), length));
     }
-    ALWAYS_INLINE StringView(const unsigned char* characters, size_t length)
-        : m_characters((const char*)characters)
+    ALWAYS_INLINE StringView(unsigned char const* characters, size_t length)
+        : m_characters(reinterpret_cast<char const*>(characters))
         , m_length(length)
     {
-        ASSERT(!Checked<uintptr_t>::addition_would_overflow((uintptr_t)characters, length));
+        VERIFY(!Checked<uintptr_t>::addition_would_overflow(reinterpret_cast<uintptr_t>(characters), length));
     }
-    ALWAYS_INLINE constexpr StringView(const char* cstring)
-        : m_characters(cstring)
-        , m_length(cstring ? __builtin_strlen(cstring) : 0)
+    ALWAYS_INLINE StringView(ReadonlyBytes bytes)
+        : m_characters(reinterpret_cast<char const*>(bytes.data()))
+        , m_length(bytes.size())
     {
     }
 
-    StringView(const ByteBuffer&);
-    StringView(const String&);
-    StringView(const FlyString&);
+    // Note: This is here for Jakt.
+    ALWAYS_INLINE static StringView from_string_literal(StringView string)
+    {
+        return string;
+    }
 
-    bool is_null() const { return !m_characters; }
-    bool is_empty() const { return m_length == 0; }
-    const char* characters_without_null_termination() const { return m_characters; }
-    size_t length() const { return m_length; }
-    const char& operator[](size_t index) const { return m_characters[index]; }
+    StringView(ByteBuffer const&);
+#ifndef KERNEL
+    StringView(String const&);
+    StringView(FlyString const&);
+    StringView(ByteString const&);
+    StringView(DeprecatedFlyString const&);
+#endif
 
-    ConstIterator begin() const { return characters_without_null_termination(); }
-    ConstIterator end() const { return begin() + length(); }
+    explicit StringView(ByteBuffer&&) = delete;
+#ifndef KERNEL
+    explicit StringView(String&&) = delete;
+    explicit StringView(FlyString&&) = delete;
+    explicit StringView(ByteString&&) = delete;
+    explicit StringView(DeprecatedFlyString&&) = delete;
+#endif
 
-    unsigned hash() const;
+    template<OneOf<String, FlyString, ByteString, DeprecatedFlyString, ByteBuffer> StringType>
+    StringView& operator=(StringType&&) = delete;
 
-    bool starts_with(const StringView&) const;
-    bool ends_with(const StringView&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
-    bool starts_with(char) const;
-    bool ends_with(char) const;
-    bool matches(const StringView& mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
-    bool contains(char) const;
-    bool equals_ignoring_case(const StringView& other) const;
+    [[nodiscard]] constexpr bool is_null() const
+    {
+        return m_characters == nullptr;
+    }
+    [[nodiscard]] constexpr bool is_empty() const { return m_length == 0; }
 
-    Optional<size_t> find_first_of(char) const;
-    Optional<size_t> find_first_of(const StringView&) const;
+    [[nodiscard]] constexpr char const* characters_without_null_termination() const { return m_characters; }
+    [[nodiscard]] constexpr size_t length() const { return m_length; }
 
-    Optional<size_t> find_last_of(char) const;
-    Optional<size_t> find_last_of(const StringView&) const;
+    [[nodiscard]] ReadonlyBytes bytes() const { return { m_characters, m_length }; }
 
-    StringView substring_view(size_t start, size_t length) const;
-    Vector<StringView> split_view(char, bool keep_empty = false) const;
-    Vector<StringView> split_view(const StringView&, bool keep_empty = false) const;
+    constexpr char const& operator[](size_t index) const
+    {
+        if (!is_constant_evaluated())
+            VERIFY(index < m_length);
+        return m_characters[index];
+    }
+
+    using ConstIterator = SimpleIterator<StringView const, char const>;
+
+    [[nodiscard]] constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
+    [[nodiscard]] constexpr ConstIterator end() const { return ConstIterator::end(*this); }
+
+    [[nodiscard]] constexpr unsigned hash() const
+    {
+        if (is_empty())
+            return 0;
+        return string_hash(characters_without_null_termination(), length());
+    }
+
+    [[nodiscard]] bool starts_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool ends_with(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool starts_with(char) const;
+    [[nodiscard]] bool ends_with(char) const;
+
+#ifndef KERNEL
+    [[nodiscard]] bool matches(StringView mask, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+    [[nodiscard]] bool matches(StringView mask, Vector<MaskSpan>&, CaseSensitivity = CaseSensitivity::CaseInsensitive) const;
+#endif
+
+    [[nodiscard]] bool contains(char) const;
+    [[nodiscard]] bool contains(u32) const;
+    [[nodiscard]] bool contains(StringView, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
+    [[nodiscard]] bool equals_ignoring_ascii_case(StringView) const;
+
+    [[nodiscard]] StringView trim(StringView characters, TrimMode mode = TrimMode::Both) const { return StringUtils::trim(*this, characters, mode); }
+    [[nodiscard]] StringView trim_whitespace(TrimMode mode = TrimMode::Both) const { return StringUtils::trim_whitespace(*this, mode); }
+
+#ifndef KERNEL
+    [[nodiscard]] ByteString to_lowercase_string() const;
+    [[nodiscard]] ByteString to_uppercase_string() const;
+    [[nodiscard]] ByteString to_titlecase_string() const;
+#endif
+
+    [[nodiscard]] Optional<size_t> find(char needle, size_t start = 0) const
+    {
+        return StringUtils::find(*this, needle, start);
+    }
+    [[nodiscard]] Optional<size_t> find(StringView needle, size_t start = 0) const { return StringUtils::find(*this, needle, start); }
+    [[nodiscard]] Optional<size_t> find_last(char needle) const { return StringUtils::find_last(*this, needle); }
+    [[nodiscard]] Optional<size_t> find_last(StringView needle) const { return StringUtils::find_last(*this, needle); }
+    [[nodiscard]] Optional<size_t> find_last_not(char needle) const { return StringUtils::find_last_not(*this, needle); }
+
+#ifndef KERNEL
+    [[nodiscard]] Vector<size_t> find_all(StringView needle) const;
+#endif
+
+    using SearchDirection = StringUtils::SearchDirection;
+    [[nodiscard]] Optional<size_t> find_any_of(StringView needles, SearchDirection direction = SearchDirection::Forward) const { return StringUtils::find_any_of(*this, needles, direction); }
+
+    [[nodiscard]] constexpr StringView substring_view(size_t start, size_t length) const
+    {
+        if (!is_constant_evaluated())
+            VERIFY(start + length <= m_length);
+        return { m_characters + start, length };
+    }
+
+    [[nodiscard]] constexpr StringView substring_view(size_t start) const
+    {
+        if (!is_constant_evaluated())
+            VERIFY(start <= length());
+        return substring_view(start, length() - start);
+    }
+
+    [[nodiscard]] Vector<StringView> split_view(char, SplitBehavior = SplitBehavior::Nothing) const;
+    [[nodiscard]] Vector<StringView> split_view(StringView, SplitBehavior = SplitBehavior::Nothing) const;
+
+#ifndef KERNEL
+    [[nodiscard]] Vector<StringView> split_view_if(Function<bool(char)> const& predicate, SplitBehavior = SplitBehavior::Nothing) const;
+#endif
+
+    [[nodiscard]] StringView find_last_split_view(char separator) const
+    {
+        auto begin = find_last(separator);
+        if (!begin.has_value())
+            return *this;
+        return substring_view(begin.release_value() + 1);
+    }
+
+    [[nodiscard]] StringView find_first_split_view(char separator) const
+    {
+        auto needle_begin = find(separator);
+        if (!needle_begin.has_value())
+            return *this;
+        return substring_view(0, needle_begin.release_value());
+    }
+
+    template<typename Callback>
+    auto for_each_split_view(char separator, SplitBehavior split_behavior, Callback callback) const
+    {
+        StringView seperator_view { &separator, 1 };
+        return for_each_split_view(seperator_view, split_behavior, callback);
+    }
+
+    template<typename Callback>
+    auto for_each_split_view(StringView separator, SplitBehavior split_behavior, Callback callback) const
+    {
+        VERIFY(!separator.is_empty());
+        // FIXME: This can't go in the template header since declval won't allow the incomplete StringView type.
+        using CallbackReturn = InvokeResult<Callback, StringView>;
+        constexpr auto ReturnsErrorOr = FallibleFunction<Callback, StringView>;
+        // FIXME: We might need a concept for this...
+        constexpr auto ReturnsIterationDecision = []() -> bool {
+            if constexpr (ReturnsErrorOr)
+                return IsSame<typename CallbackReturn::ResultType, IterationDecision>;
+            return IsSame<CallbackReturn, IterationDecision>;
+        }();
+        using ReturnType = Conditional<ReturnsErrorOr, ErrorOr<void>, void>;
+        return [&]() -> ReturnType {
+            if (is_empty())
+                return ReturnType();
+
+            StringView view { *this };
+            auto maybe_separator_index = find(separator);
+            bool keep_empty = has_flag(split_behavior, SplitBehavior::KeepEmpty);
+            bool keep_separator = has_flag(split_behavior, SplitBehavior::KeepTrailingSeparator);
+            while (maybe_separator_index.has_value()) {
+                auto separator_index = maybe_separator_index.value();
+                auto part_with_separator = view.substring_view(0, separator_index + separator.length());
+                if (keep_empty || separator_index > 0) {
+                    auto part = part_with_separator;
+                    if (!keep_separator)
+                        part = part_with_separator.substring_view(0, separator_index);
+                    if constexpr (ReturnsErrorOr) {
+                        if constexpr (ReturnsIterationDecision) {
+                            if (TRY(callback(part)) == IterationDecision::Break)
+                                return ReturnType();
+                        } else {
+                            TRY(callback(part));
+                        }
+                    } else {
+                        if constexpr (ReturnsIterationDecision) {
+                            if (callback(part) == IterationDecision::Break)
+                                return ReturnType();
+                        } else {
+                            callback(part);
+                        }
+                    }
+                }
+                view = view.substring_view_starting_after_substring(part_with_separator);
+                maybe_separator_index = view.find(separator);
+            }
+            if (keep_empty || !view.is_empty()) {
+                if constexpr (ReturnsErrorOr)
+                    TRY(callback(view));
+                else
+                    callback(view);
+            }
+
+            return ReturnType();
+        }();
+    }
 
     // Create a Vector of StringViews split by line endings. As of CommonMark
     // 0.29, the spec defines a line ending as "a newline (U+000A), a carriage
     // return (U+000D) not followed by a newline, or a carriage return and a
     // following newline.".
-    Vector<StringView> lines(bool consider_cr = true) const;
+    enum class ConsiderCarriageReturn {
+        No,
+        Yes,
+    };
 
-    int to_int(bool& ok) const;
-    unsigned to_uint(bool& ok) const;
+#ifndef KERNEL
+    [[nodiscard]] Vector<StringView> lines(ConsiderCarriageReturn = ConsiderCarriageReturn::Yes) const;
+#endif
+
+    [[nodiscard]] size_t count_lines(ConsiderCarriageReturn = ConsiderCarriageReturn::Yes) const;
 
     // Create a new substring view of this string view, starting either at the beginning of
     // the given substring view, or after its end, and continuing until the end of this string
@@ -115,57 +270,162 @@ public:
     //     StringView substr { "oo" };
     //
     // would not work.
-    StringView substring_view_starting_from_substring(const StringView& substring) const;
-    StringView substring_view_starting_after_substring(const StringView& substring) const;
+    [[nodiscard]] StringView substring_view_starting_from_substring(StringView substring) const;
+    [[nodiscard]] StringView substring_view_starting_after_substring(StringView substring) const;
 
-    bool operator==(const char* cstring) const
+    [[nodiscard]] bool copy_characters_to_buffer(char* buffer, size_t buffer_size) const;
+
+    constexpr bool operator==(char const* cstring) const
     {
         if (is_null())
-            return !cstring;
+            return cstring == nullptr;
         if (!cstring)
             return false;
-        size_t other_length = __builtin_strlen(cstring);
-        if (m_length != other_length)
-            return false;
-        return !__builtin_memcmp(m_characters, cstring, m_length);
+        // NOTE: `m_characters` is not guaranteed to be null-terminated, but `cstring` is.
+        char const* cp = cstring;
+        for (size_t i = 0; i < m_length; ++i) {
+            if (*cp == '\0')
+                return false;
+            if (m_characters[i] != *(cp++))
+                return false;
+        }
+        return *cp == '\0';
     }
-    bool operator!=(const char* cstring) const
+
+    constexpr bool operator==(char const c) const
     {
-        return !(*this == cstring);
+        return m_length == 1 && *m_characters == c;
     }
 
-    bool operator==(const String&) const;
+#ifndef KERNEL
+    bool operator==(ByteString const&) const;
+#endif
 
-    bool operator==(const StringView& other) const
+    [[nodiscard]] constexpr int compare(StringView other) const
     {
-        if (is_null())
-            return other.is_null();
-        if (other.is_null())
-            return false;
-        if (length() != other.length())
-            return false;
-        return !__builtin_memcmp(m_characters, other.m_characters, m_length);
+        if (m_length == 0 && other.m_length == 0)
+            return 0;
+
+        if (m_characters == nullptr)
+            return other.m_characters ? -1 : 0;
+
+        if (other.m_characters == nullptr)
+            return 1;
+
+        size_t rlen = min(m_length, other.m_length);
+        int c = __builtin_memcmp(m_characters, other.m_characters, rlen);
+        if (c == 0) {
+            if (length() < other.length())
+                return -1;
+            if (length() == other.length())
+                return 0;
+            return 1;
+        }
+        return c;
     }
 
-    bool operator!=(const StringView& other) const
+    constexpr bool operator==(StringView other) const
     {
-        return !(*this == other);
+        return length() == other.length() && compare(other) == 0;
     }
 
-    const StringImpl* impl() const { return m_impl; }
+    constexpr bool operator!=(StringView other) const
+    {
+        return length() != other.length() || compare(other) != 0;
+    }
 
-    String to_string() const;
+    constexpr bool operator<(StringView other) const { return compare(other) < 0; }
 
-    const char* begin() { return m_characters; }
-    const char* end() { return m_characters + m_length; }
+    constexpr bool operator<=(StringView other) const { return compare(other) <= 0; }
+
+    constexpr bool operator>(StringView other) const { return compare(other) > 0; }
+
+    constexpr bool operator>=(StringView other) const { return compare(other) >= 0; }
+
+#ifndef KERNEL
+    [[nodiscard]] ByteString to_byte_string() const;
+#endif
+
+    [[nodiscard]] bool is_whitespace() const
+    {
+        return StringUtils::is_whitespace(*this);
+    }
+
+#ifndef KERNEL
+    [[nodiscard]] ByteString replace(StringView needle, StringView replacement, ReplaceMode) const;
+#endif
+    [[nodiscard]] size_t count(StringView needle) const
+    {
+        return StringUtils::count(*this, needle);
+    }
+
+    [[nodiscard]] size_t count(char needle) const
+    {
+        return StringUtils::count(*this, needle);
+    }
+
+    template<typename... Ts>
+    [[nodiscard]] ALWAYS_INLINE constexpr bool is_one_of(Ts&&... strings) const
+    {
+        return (... || this->operator==(forward<Ts>(strings)));
+    }
+
+    template<typename... Ts>
+    [[nodiscard]] ALWAYS_INLINE constexpr bool is_one_of_ignoring_ascii_case(Ts&&... strings) const
+    {
+        return (... ||
+                [this, &strings]() -> bool {
+            if constexpr (requires(Ts a) { a.view()->StringView; })
+                return this->equals_ignoring_ascii_case(forward<Ts>(strings.view()));
+            else
+                return this->equals_ignoring_ascii_case(forward<Ts>(strings));
+        }());
+    }
+
+    template<Arithmetic T>
+    Optional<T> to_number(TrimWhitespace trim_whitespace = TrimWhitespace::Yes) const
+    {
+#ifndef KERNEL
+        if constexpr (IsFloatingPoint<T>)
+            return StringUtils::convert_to_floating_point<T>(*this, trim_whitespace);
+#endif
+        if constexpr (IsSigned<T>)
+            return StringUtils::convert_to_int<T>(*this, trim_whitespace);
+        else
+            return StringUtils::convert_to_uint<T>(*this, trim_whitespace);
+    }
 
 private:
-    friend class String;
-    const StringImpl* m_impl { nullptr };
-    const char* m_characters { nullptr };
+    friend class ByteString;
+    char const* m_characters { nullptr };
     size_t m_length { 0 };
+};
+
+template<>
+struct Traits<StringView> : public DefaultTraits<StringView> {
+    using PeekType = StringView;
+    using ConstPeekType = StringView;
+    static unsigned hash(StringView s) { return s.hash(); }
+};
+
+struct CaseInsensitiveASCIIStringViewTraits : public Traits<StringView> {
+    static unsigned hash(StringView s)
+    {
+        if (s.is_empty())
+            return 0;
+        return case_insensitive_string_hash(s.characters_without_null_termination(), s.length());
+    }
+    static bool equals(StringView const& a, StringView const& b) { return a.equals_ignoring_ascii_case(b); }
 };
 
 }
 
+[[nodiscard]] ALWAYS_INLINE consteval AK::StringView operator""sv(char const* cstring, size_t length)
+{
+    return AK::StringView(cstring, length);
+}
+
+#if USING_AK_GLOBALLY
+using AK::CaseInsensitiveASCIIStringViewTraits;
 using AK::StringView;
+#endif

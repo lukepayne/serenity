@@ -1,7 +1,12 @@
-#!/bin/bash ../.port_include.sh
+#!/usr/bin/env -S bash ../.port_include.sh
 port=mrsh
-version=d9763a32e7da572677d1681bb1fc67f117d641f3
-files="https://codeload.github.com/emersion/mrsh/legacy.tar.gz/d9763a32e7da572677d1681bb1fc67f117d641f3 emersion-mrsh-d9763a3.tar.gz"
+version=cd3c3a48055ab4085d83f149ff4b4feba40b40cb
+files=(
+    "https://github.com/emersion/mrsh/archive/${version}.tar.gz#d26e3fdee71ef168cf3f8ad2912c148b20aab524048e4ea899d6b83fb299ceab"
+)
 useconfigure=true
-makeopts=
-workdir=emersion-mrsh-d9763a3
+configopts=(
+    "--without-readline"
+)
+
+export CFLAGS=-Wno-deprecated-declarations

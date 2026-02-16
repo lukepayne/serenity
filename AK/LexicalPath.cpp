@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Max Wipfli <max.wipfli@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/LexicalPath.h>
@@ -31,33 +12,120 @@
 
 namespace AK {
 
-LexicalPath::LexicalPath(const StringView& s)
-    : m_string(s)
-{
-    canonicalize();
-    m_is_valid = true;
-}
+char s_single_dot = '.';
 
-void LexicalPath::canonicalize()
+LexicalPath::LexicalPath(ByteString path)
+    : m_string(canonicalized_path(move(path)))
 {
     if (m_string.is_empty()) {
+        m_string = ".";
+        m_dirname = m_string;
+        m_basename = {};
+        m_title = {};
+        m_extension = {};
         m_parts.clear();
         return;
     }
 
-    m_is_absolute = m_string[0] == '/';
-    auto parts = m_string.split_view('/');
+    m_parts = m_string.split_view('/');
 
+    auto last_slash_index = m_string.view().find_last('/');
+    if (!last_slash_index.has_value()) {
+        // The path contains a single part and is not absolute. m_dirname = "."sv
+        m_dirname = { &s_single_dot, 1 };
+    } else if (*last_slash_index == 0) {
+        // The path contains a single part and is absolute. m_dirname = "/"sv
+        m_dirname = m_string.substring_view(0, 1);
+    } else {
+        m_dirname = m_string.substring_view(0, *last_slash_index);
+    }
+
+    if (m_string == "/")
+        m_basename = m_string;
+    else {
+        VERIFY(m_parts.size() > 0);
+        m_basename = m_parts.last();
+    }
+
+    auto last_dot_index = m_basename.find_last('.');
+    // NOTE: if the dot index is 0, this means we have ".foo", it's not an extension, as the title would then be "".
+    if (last_dot_index.has_value() && *last_dot_index != 0) {
+        m_title = m_basename.substring_view(0, *last_dot_index);
+        m_extension = m_basename.substring_view(*last_dot_index + 1);
+    } else {
+        m_title = m_basename;
+        m_extension = {};
+    }
+}
+
+Vector<ByteString> LexicalPath::parts() const
+{
+    Vector<ByteString> vector;
+    vector.ensure_capacity(m_parts.size());
+    for (auto& part : m_parts)
+        vector.unchecked_append(part);
+    return vector;
+}
+
+bool LexicalPath::has_extension(StringView extension) const
+{
+    return m_string.ends_with(extension, CaseSensitivity::CaseInsensitive);
+}
+
+bool LexicalPath::is_canonical() const
+{
+    // FIXME: This can probably be done more efficiently.
+    // FIXME: Find a way to share this with KLexicalPath?
+    if (m_string.is_empty())
+        return false;
+    if (m_string.ends_with('/') && m_string.length() != 1)
+        return false;
+    if (m_string.starts_with("./"sv) || m_string.contains("/./"sv) || m_string.ends_with("/."sv))
+        return false;
+    if (m_string.starts_with("../"sv) || m_string.contains("/../"sv) || m_string.ends_with("/.."sv))
+        return false;
+    if (m_string.contains("//"sv))
+        return false;
+    return true;
+}
+
+bool LexicalPath::is_child_of(LexicalPath const& possible_parent) const
+{
+    // Any relative path is a child of an absolute path.
+    if (!this->is_absolute() && possible_parent.is_absolute())
+        return true;
+    // An absolute path can't meaningfully be a child of a relative path.
+    if (this->is_absolute() && !possible_parent.is_absolute())
+        return false;
+
+    // Two relative paths and two absolute paths can be meaningfully compared.
+    if (possible_parent.parts_view().size() > this->parts_view().size())
+        return false;
+    auto common_parts_with_parent = this->parts_view().span().trim(possible_parent.parts_view().size());
+    return common_parts_with_parent == possible_parent.parts_view().span();
+}
+
+ByteString LexicalPath::canonicalized_path(ByteString path)
+{
+    // NOTE: We never allow an empty m_string, if it's empty, we just set it to '.'.
+    if (path.is_empty())
+        return ".";
+
+    // NOTE: If there are no dots, no '//' and the path doesn't end with a slash, it is already canonical.
+    if (!path.contains("."sv) && !path.contains("//"sv) && !path.ends_with('/'))
+        return path;
+
+    auto is_absolute = path[0] == '/';
+    auto parts = path.split_view('/');
     size_t approximate_canonical_length = 0;
-    Vector<String> canonical_parts;
+    Vector<ByteString> canonical_parts;
 
-    for (size_t i = 0; i < parts.size(); ++i) {
-        auto& part = parts[i];
+    for (auto& part : parts) {
         if (part == ".")
             continue;
         if (part == "..") {
             if (canonical_parts.is_empty()) {
-                if (m_is_absolute) {
+                if (is_absolute) {
                     // At the root, .. does nothing.
                     continue;
                 }
@@ -69,50 +137,88 @@ void LexicalPath::canonicalize()
                 }
             }
         }
-        if (!part.is_empty()) {
-            approximate_canonical_length += part.length() + 1;
-            canonical_parts.append(part);
-        }
-    }
-    if (canonical_parts.is_empty()) {
-        m_string = m_basename = m_dirname = "/";
-        return;
+        approximate_canonical_length += part.length() + 1;
+        canonical_parts.append(part);
     }
 
-    StringBuilder dirname_builder(approximate_canonical_length);
-    for (size_t i = 0; i < canonical_parts.size() - 1; ++i) {
-        auto& canonical_part = canonical_parts[i];
-        if (m_is_absolute || i != 0)
-            dirname_builder.append('/');
-        dirname_builder.append(canonical_part);
-    }
-    m_dirname = dirname_builder.to_string();
-
-    m_basename = canonical_parts.last();
-    auto name_parts = m_basename.split('.');
-    m_title = name_parts.is_empty() ? String() : name_parts[0];
-    if (name_parts.size() > 1)
-        m_extension = name_parts.last();
+    if (canonical_parts.is_empty() && !is_absolute)
+        canonical_parts.append(".");
 
     StringBuilder builder(approximate_canonical_length);
-    for (size_t i = 0; i < canonical_parts.size(); ++i) {
-        auto& canonical_part = canonical_parts[i];
-        if (m_is_absolute || i != 0)
-            builder.append('/');
-        builder.append(canonical_part);
+    if (is_absolute)
+        builder.append('/');
+    builder.join('/', canonical_parts);
+    return builder.to_byte_string();
+}
+
+ByteString LexicalPath::absolute_path(ByteString dir_path, ByteString target)
+{
+    if (LexicalPath(target).is_absolute()) {
+        return LexicalPath::canonicalized_path(target);
     }
-    m_parts = move(canonical_parts);
-    m_string = builder.to_string();
+    return LexicalPath::canonicalized_path(join(dir_path, target).string());
 }
 
-bool LexicalPath::has_extension(const StringView& extension) const
+ByteString LexicalPath::relative_path(StringView a_path, StringView a_prefix)
 {
-    return m_string.ends_with(extension, CaseSensitivity::CaseInsensitive);
+    if (!a_path.starts_with('/') || !a_prefix.starts_with('/')) {
+        // FIXME: This should probably VERIFY or return an Optional<ByteString>.
+        return ""sv;
+    }
+
+    if (a_path == a_prefix)
+        return ".";
+
+    // NOTE: Strip optional trailing slashes, except if the full path is only "/".
+    auto path = canonicalized_path(a_path);
+    auto prefix = canonicalized_path(a_prefix);
+
+    if (path == prefix)
+        return ".";
+
+    // NOTE: Handle this special case first.
+    if (prefix == "/"sv)
+        return path.substring_view(1);
+
+    // NOTE: This means the prefix is a direct child of the path.
+    if (path.starts_with(prefix) && path[prefix.length()] == '/') {
+        return path.substring_view(prefix.length() + 1);
+    }
+
+    auto path_parts = path.split_view('/');
+    auto prefix_parts = prefix.split_view('/');
+    size_t index_of_first_part_that_differs = 0;
+    for (; index_of_first_part_that_differs < path_parts.size() && index_of_first_part_that_differs < prefix_parts.size(); index_of_first_part_that_differs++) {
+        if (path_parts[index_of_first_part_that_differs] != prefix_parts[index_of_first_part_that_differs])
+            break;
+    }
+
+    StringBuilder builder;
+    for (size_t part_index = index_of_first_part_that_differs; part_index < prefix_parts.size(); part_index++) {
+        builder.append("../"sv);
+    }
+    for (size_t part_index = index_of_first_part_that_differs; part_index < path_parts.size(); part_index++) {
+        builder.append(path_parts[part_index]);
+        if (part_index != path_parts.size() - 1) // We don't need a slash after the file name or the name of the last directory
+            builder.append('/');
+    }
+
+    return builder.to_byte_string();
 }
 
-String LexicalPath::canonicalized_path(const StringView& path)
+LexicalPath LexicalPath::append(StringView value) const
 {
-    return LexicalPath(path).string();
+    return LexicalPath::join(m_string, value);
+}
+
+LexicalPath LexicalPath::prepend(StringView value) const
+{
+    return LexicalPath::join(value, m_string);
+}
+
+LexicalPath LexicalPath::parent() const
+{
+    return append(".."sv);
 }
 
 }

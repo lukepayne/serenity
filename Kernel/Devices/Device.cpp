@@ -1,84 +1,182 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Singleton.h>
+#include <Kernel/Devices/BaseDevices.h>
+#include <Kernel/Devices/BlockDevice.h>
+#include <Kernel/Devices/CharacterDevice.h>
 #include <Kernel/Devices/Device.h>
 #include <Kernel/FileSystem/InodeMetadata.h>
-#include <LibC/errno_numbers.h>
+#include <Kernel/FileSystem/SysFS/Component.h>
+#include <Kernel/FileSystem/SysFS/Subsystems/DeviceIdentifiers/BlockDevicesDirectory.h>
+#include <Kernel/FileSystem/SysFS/Subsystems/DeviceIdentifiers/CharacterDevicesDirectory.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
-static HashMap<u32, Device*>* s_all_devices;
+struct AllDevicesDetails {
+    SpinlockProtected<HashMap<u64, BlockDevice*>, LockRank::None> block_devices {};
+    SpinlockProtected<HashMap<u64, CharacterDevice*>, LockRank::None> char_devices {};
+    SpinlockProtected<CircularQueue<DeviceEvent, 100>, LockRank::None> event_queue {};
+    // NOTE: There's no locking on this pointer because we expect to initialize it once
+    // and never touch it again.
+    OwnPtr<BaseDevices> base_devices;
+};
 
-HashMap<u32, Device*>& Device::all_devices()
+static Singleton<AllDevicesDetails> s_all_details;
+
+SpinlockProtected<CircularQueue<DeviceEvent, 100>, LockRank::None>& Device::event_queue()
 {
-    if (s_all_devices == nullptr)
-        s_all_devices = new HashMap<u32, Device*>;
-    return *s_all_devices;
+    return s_all_details->event_queue;
 }
 
-void Device::for_each(Function<void(Device&)> callback)
+BaseDevices* Device::base_devices()
 {
-    for (auto& entry : all_devices())
-        callback(*entry.value);
+    return s_all_details->base_devices.ptr();
 }
 
-Device* Device::get_device(unsigned major, unsigned minor)
+UNMAP_AFTER_INIT void Device::initialize_base_devices()
 {
-    auto it = all_devices().find(encoded_device(major, minor));
-    if (it == all_devices().end())
-        return nullptr;
-    return it->value;
+    auto base_devices = MUST(adopt_nonnull_own_or_enomem(new (nothrow) BaseDevices(*NullDevice::must_initialize(), *ConsoleDevice::must_create(), *DeviceControlDevice::must_create())));
+    s_all_details->base_devices = move(base_devices);
 }
 
-Device::Device(unsigned major, unsigned minor)
+void Device::run_by_type_and_major_minor_numbers(DeviceNodeType type, MajorNumber major, MinorNumber minor, Function<void(RefPtr<Device>)> const& callback)
+{
+    VERIFY(type == DeviceNodeType::Block || type == DeviceNodeType::Character);
+
+    auto find_device_in_map = [major, minor](auto& map) -> RefPtr<Device> {
+        auto it = map.find(encoded_device(major.value(), minor.value()));
+        if (it == map.end())
+            return nullptr;
+        return *it->value;
+    };
+
+    if (type == DeviceNodeType::Block) {
+        s_all_details->block_devices.with([&](auto& map) {
+            callback(find_device_in_map(map));
+        });
+    } else {
+        s_all_details->char_devices.with([&](auto& map) {
+            callback(find_device_in_map(map));
+        });
+    }
+}
+
+void Device::before_will_be_destroyed_remove_from_device_management()
+{
+    before_device_removal({}, *this);
+    m_state = State::BeingRemoved;
+}
+
+void Device::after_inserting_add_to_device_management()
+{
+    after_inserting_device({}, *this);
+}
+
+Device::Device(MajorNumber major, MinorNumber minor)
     : m_major(major)
     , m_minor(minor)
 {
-    u32 device_id = encoded_device(major, minor);
-    auto it = all_devices().find(device_id);
-    if (it != all_devices().end()) {
-        dbg() << "Already registered " << major << "," << minor << ": " << it->value->class_name();
-    }
-    ASSERT(!all_devices().contains(device_id));
-    all_devices().set(device_id, this);
+}
+
+ErrorOr<void> Device::after_inserting()
+{
+    VERIFY(!m_sysfs_component);
+    auto sys_fs_component = SysFSDeviceComponent::must_create(*this);
+    m_sysfs_component = sys_fs_component;
+    after_inserting_add_to_device_identifier_directory();
+    after_inserting_add_to_device_management();
+    return {};
+}
+
+void Device::will_be_destroyed()
+{
+    VERIFY(m_sysfs_component);
+    before_will_be_destroyed_remove_from_device_management();
+    before_will_be_destroyed_remove_from_device_identifier_directory();
 }
 
 Device::~Device()
 {
-    all_devices().remove(encoded_device(m_major, m_minor));
+    VERIFY(m_state == State::BeingRemoved);
 }
 
-String Device::absolute_path() const
+ErrorOr<NonnullOwnPtr<KString>> Device::pseudo_path(OpenFileDescription const&) const
 {
-    return String::format("device:%u,%u (%s)", m_major, m_minor, class_name());
+    return KString::formatted("device:{},{}", major(), minor());
 }
 
-String Device::absolute_path(const FileDescription&) const
+ErrorOr<NonnullRefPtr<OpenFileDescription>> Device::open(int options)
 {
-    return absolute_path();
+    if (Process::current().is_jailed() && !is_openable_by_jailed_processes())
+        return Error::from_errno(EPERM);
+    return File::open(options);
+}
+
+void Device::process_next_queued_request(Badge<AsyncDeviceRequest>, AsyncDeviceRequest const& completed_request)
+{
+    SpinlockLocker lock(m_requests_lock);
+    VERIFY(!m_requests.is_empty());
+    VERIFY(m_requests.first().ptr() == &completed_request);
+    m_requests.remove(m_requests.begin());
+    if (!m_requests.is_empty()) {
+        auto* next_request = m_requests.first().ptr();
+        next_request->do_start(move(lock));
+    }
+
+    evaluate_block_conditions();
+}
+
+void Device::after_inserting_device(Badge<Device>, Device& device)
+{
+    if (device.is_block_device()) {
+        s_all_details->block_devices.with([&](auto& map) -> void {
+            add_device_to_map<BlockDevice>(map, device);
+        });
+    } else {
+        VERIFY(device.is_character_device());
+        s_all_details->char_devices.with([&](auto& map) -> void {
+            add_device_to_map<CharacterDevice>(map, device);
+        });
+    }
+
+    s_all_details->event_queue.with([&](auto& queue) {
+        DeviceEvent event { DeviceEvent::State::Inserted, device.is_block_device(), device.major().value(), device.minor().value() };
+        queue.enqueue(event);
+    });
+
+    if (s_all_details->base_devices)
+        s_all_details->base_devices->device_control_device->evaluate_block_conditions();
+}
+
+void Device::before_device_removal(Badge<Device>, Device& device)
+{
+    u64 device_id = encoded_device(device.major(), device.minor());
+
+    if (device.is_block_device()) {
+        s_all_details->block_devices.with([&](auto& map) -> void {
+            VERIFY(map.contains(device_id));
+            map.remove(encoded_device(device.major(), device.minor()));
+        });
+    } else {
+        VERIFY(device.is_character_device());
+        s_all_details->char_devices.with([&](auto& map) -> void {
+            VERIFY(map.contains(device_id));
+            map.remove(encoded_device(device.major(), device.minor()));
+        });
+    }
+
+    s_all_details->event_queue.with([&](auto& queue) {
+        DeviceEvent event { DeviceEvent::State::Removed, device.is_block_device(), device.major().value(), device.minor().value() };
+        queue.enqueue(event);
+    });
+
+    if (s_all_details->base_devices)
+        s_all_details->base_devices->device_control_device->evaluate_block_conditions();
 }
 
 }

@@ -1,72 +1,109 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/DistinctNumeric.h>
+#include <Kernel/API/POSIX/sys/types.h>
+
 namespace Kernel {
+
+enum class LockRank;
 
 class BlockDevice;
 class CharacterDevice;
+class Coredump;
+class Credentials;
+class CustodyBase;
 class Custody;
+class DeprecatedWaitQueue;
 class Device;
+class DeviceControlDevice;
 class DiskCache;
 class DoubleBuffer;
 class File;
-class FileDescription;
+class FATInode;
+class OpenFileDescription;
+class DisplayConnector;
+class FileSystem;
+class FutexQueue;
+class HostnameContext;
 class IPv4Socket;
 class Inode;
 class InodeIdentifier;
-class SharedInodeVMObject;
 class InodeWatcher;
+class MountFile;
 class KBuffer;
-class KResult;
+class KString;
 class LocalSocket;
-class MappedROM;
-class PageDirectory;
+class LoopDevice;
+class Mutex;
+class MasterPTY;
+class Mount;
 class PerformanceEventBuffer;
-class PhysicalPage;
-class PhysicalRegion;
+class PowerStateSwitchTask;
+class ProcFS;
+class ProcFSInode;
 class Process;
-class ProcessInspectionHandle;
-class ThreadTracer;
-class Range;
-class RangeAllocator;
-class Region;
+class ProcessGroup;
+class RAMFS;
+template<LockRank Rank>
+class RecursiveSpinlock;
 class Scheduler;
-class SharedBuffer;
+class ScopedProcessList;
 class Socket;
+class StorageManagement;
+class SysFS;
+class SysFSDirectory;
+class SysFSRootDirectory;
+class SysFSBusDirectory;
+class SysFSDevicesDirectory;
+class SysFSDirectoryInode;
+class SysFSInode;
 class TCPSocket;
 class TTY;
 class Thread;
+class ThreadTracer;
+class RAMFSInode;
 class UDPSocket;
-class VFS;
-class VMObject;
+class UserOrKernelBuffer;
+class VFSRootContext;
 class WaitQueue;
+class WorkQueue;
 
-template<typename T>
-class KResultOr;
+namespace Memory {
+class AddressSpace;
+class AnonymousVMObject;
+class InodeVMObject;
+class MappedROM;
+class MemoryManager;
+class PageDirectory;
+class PhysicalRAMPage;
+class PhysicalRegion;
+class PrivateInodeVMObject;
+class Region;
+class SharedInodeVMObject;
+class VMObject;
+class VirtualRange;
+}
+
+template<LockRank Rank>
+class Spinlock;
+template<typename LockType>
+class SpinlockLocker;
+
+struct InodeMetadata;
+struct TrapFrame;
+
+AK_TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessID);
+AK_TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ThreadID);
+AK_TYPEDEF_DISTINCT_ORDERED_ID(pid_t, SessionID);
+AK_TYPEDEF_DISTINCT_ORDERED_ID(pid_t, ProcessGroupID);
+
+AK_TYPEDEF_DISTINCT_ORDERED_ID(uid_t, UserID);
+AK_TYPEDEF_DISTINCT_ORDERED_ID(gid_t, GroupID);
 
 }

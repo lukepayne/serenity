@@ -21,18 +21,31 @@ Run `help()` in REPL mode to see its available built-in functions.
 
 ## Options
 
-* `-A`, `--dump-ast`: Dump the Abstract Syntax Tree after parsing the program.
-* `-l`, `--print-last-result`: Print the result of the last statement executed.
-* `-g`, `--gc-on-every-allocation`: Run garbage collection on every allocation.
-* `-s`, `--no-syntax-highlight`: Disable live syntax highlighting in the REPL
-* `-t`, `--test-mode`: Run the interpreter with added functionality for the test harness
+-   `-A`, `--dump-ast`: Dump the Abstract Syntax Tree after parsing the program.
+-   `-d`, `--dump-bytecode`: Dump the bytecode
+-   `-b`, `--run-bytecode`: Run the bytecode
+-   `-p`, `--optimize-bytecode`: Optimize the bytecode
+-   `-m`, `--as-module`: Treat as module
+-   `-l`, `--print-last-result`: Print the result of the last statement executed.
+-   `-g`, `--gc-on-every-allocation`: Run garbage collection on every allocation.
+-   `-i`, `--disable-ansi-colors`: Disable ANSI colors
+-   `-h`, `--disable-source-location-hints`: Disable source location hints
+-   `-s`, `--no-syntax-highlight`: Disable live syntax highlighting in the REPL
+-   `-c`, `--evaluate`: Evaluate the argument as a script
 
 ## Examples
 
-Here's how you execute a script:
+Here's how you execute a script from a file:
 
 ```sh
-$ js ~/js/type-play.js
+$ js ~/Source/js/type-play.js
+```
+
+Here's how you execute a script as a command line argument:
+
+```sh
+$ js -c "console.log(42)"
+42
 ```
 
 And here's an example of an interactive REPL session:
@@ -48,25 +61,6 @@ undefined
 undefined
 ```
 
-## Test mode
+## See also
 
-In test mode, the `load()` function is added to the global object and can be used
-to load further test utility functions defined in `LibJS/Tests/test-common.js`.
-
-Typically a test will look like this:
-
-```js
-load("test-common.js");
-
-try {
-    // test feature
-    console.log("PASS");
-} catch (e) {
-    console.log("FAIL: " + e);
-}
-```
-
-Available functions in `test-common.js`:
-
-* `assert(expression)`: Throws an `AssertionError` if condition does not evaluate to a truthy value
-* `assertNotReached()`: Throws an `AssertionError`, use to ensure certain code paths are never reached
+-   [`test-js`(1)](help://man/1/test-js)

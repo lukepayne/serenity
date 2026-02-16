@@ -2,16 +2,19 @@
 
 For low-level styling (spaces, parentheses, brace placement, etc), all code should follow the format specified in `.clang-format` in the project root.
 
-**Important: Make sure you use `clang-format` version 10 or later!**
+**Important: Make sure you use `clang-format` version 20 or later!**
 
 This document describes the coding style used for C++ code in the Serenity Operating System project. All new code should conform to this style.
 
 We'll definitely be tweaking and amending this over time, so let's consider it a living document. :)
 
-
 ### Names
 
-[](#names-basic) A combination of CamelCase and snake\_case. Use CamelCase (Capitalize the first letter, including all letters in an acronym) in a class, struct, or namespace name. Use snake\_case (all lowercase, with underscores separating words) for variable and function names.
+A combination of CamelCase, snake_case, and SCREAMING_CASE:
+
+-   Use CamelCase (Capitalize the first letter, including all letters in an acronym) in a class, struct, or namespace name
+-   Use snake_case (all lowercase, with underscores separating words) for variable and function names
+-   Use SCREAMING_CASE for constants (both global and static member variables)
 
 ###### Right:
 
@@ -31,7 +34,7 @@ class Filedescriptor;
 String MIME_Type();
 ```
 
-[](#names-full-words) Use full words, except in the rare case where an abbreviation would be more canonical and easier to understand.
+Use full words, except in the rare case where an abbreviation would be more canonical and easier to understand.
 
 ###### Right:
 
@@ -49,7 +52,7 @@ size_t len;
 short tabulation_index; // Goofy.
 ```
 
-[](#names-data-members) Data members in C++ classes should be private. Static data members should be prefixed by "s\_". Other data members should be prefixed by "m\_". Global variables should be prefixed by "g\_".
+Data members in C++ classes should be private. Static data members should be prefixed by "s\_". Other data members should be prefixed by "m\_". Global variables should be prefixed by "g\_".
 
 ###### Right:
 
@@ -74,7 +77,7 @@ public:
 };
 ```
 
-[](#names-setter-getter) Precede setters with the word "set". Use bare words for getters. Setter and getter names should match the names of the variables being set/gotten.
+Precede setters with the word "set". Use bare words for getters. Setter and getter names should match the names of the variables being set/gotten.
 
 ###### Right:
 
@@ -90,7 +93,7 @@ void set_count(int); // Sets m_the_count.
 int get_count() const; // Returns m_the_count.
 ```
 
-[](#names-out-argument) Precede getters that return values through out arguments with the word "get".
+Precede getters that return values through out arguments with the word "get".
 
 ###### Right:
 
@@ -104,7 +107,7 @@ void get_filename_and_inode_id(String&, InodeIdentifier&) const;
 void filename_and_inode_id(String&, InodeIdentifier&) const;
 ```
 
-[](#names-verb) Use descriptive verbs in function names.
+Use descriptive verbs in function names.
 
 ###### Right:
 
@@ -118,7 +121,7 @@ bool convert_to_ascii(short*, size_t);
 bool to_ascii(short*, size_t);
 ```
 
-[](#names-if-exists) When there are two getters for a variable, and one of them automatically makes sure the requested object is instantiated, prefix that getter function which with `ensure_`. As it ensures that an object is created, it should consequently also return a reference, not a pointer.
+When there are two getters for a variable, and one of them automatically makes sure the requested object is instantiated, prefix that getter function with `ensure_`. As it ensures that an object is created, it should consequently also return a reference, not a pointer.
 
 ###### Right:
 
@@ -134,7 +137,7 @@ Inode& inode();
 Inode* ensure_inode();
 ```
 
-[](#names-variable-name-in-function-decl) Leave meaningless variable names out of function declarations. A good rule of thumb is if the parameter type name contains the parameter name (without trailing numbers or pluralization), then the parameter name isn't needed. Usually, there should be a parameter name for bools, strings, and numerical types.
+Leave meaningless variable names out of function declarations. A good rule of thumb is if the parameter type name contains the parameter name (without trailing numbers or pluralization), then the parameter name isn't needed. Usually, there should be a parameter name for bools, strings, and numerical types.
 
 ###### Right:
 
@@ -152,7 +155,7 @@ void set_count(int count);
 void do_something(Context* context);
 ```
 
-[](#names-enum-to-bool) Prefer enums to bools on function parameters if callers are likely to be passing constants, since named constants are easier to read at the call site. An exception to this rule is a setter function, where the name of the function already makes clear what the boolean is.
+Prefer enums to bools on function parameters if callers are likely to be passing constants, since named constants are easier to read at the call site. An exception to this rule is a setter function, where the name of the function already makes clear what the boolean is.
 
 ###### Right:
 
@@ -169,13 +172,13 @@ do_something(something, false);
 set_resizable(NotResizable);
 ```
 
-[](#names-enum-members) Enum members should use InterCaps with an initial capital letter.
+Enum members should use InterCaps with an initial capital letter.
 
-[](#names-const-to-define) Prefer `const` to `#define`. Prefer inline functions to macros.
+Prefer `const` to `#define`. Prefer inline functions to macros.
 
-[](#names-define-constants) `#defined` constants should use all uppercase names with words separated by underscores.
+`#defined` constants should use all uppercase names with words separated by underscores.
 
-[](#header-guards) Use `#pragma once` instead of `#define` and `#ifdef` for header guards.
+Use `#pragma once` instead of `#define` and `#ifdef` for header guards.
 
 ###### Right:
 
@@ -194,7 +197,7 @@ set_resizable(NotResizable);
 
 ### Other Punctuation
 
-[](#punctuation-member-init) Constructors for C++ classes should initialize their members using C++ initializer syntax. Each member (and superclass) should be indented on a separate line, with the colon or comma preceding the member on that line. Prefer initialization at member definition whenever possible.
+Constructors for C++ classes should initialize their members using C++ initializer syntax. Each member (and superclass) should be indented on a separate line, with the colon or comma preceding the member on that line. Prefer initialization at member definition whenever possible.
 
 ###### Right:
 
@@ -235,7 +238,7 @@ MyClass::MyClass(Document* document) : MySuperClass()
 MyOtherClass::MyOtherClass() : MySuperClass() {}
 ```
 
-[](#punctuation-vector-index) Prefer index or range-for over iterators in Vector iterations for terse, easier-to-read code.
+Prefer index or range-for over iterators in Vector iterations for terse, easier-to-read code.
 
 ###### Right:
 
@@ -243,7 +246,6 @@ MyOtherClass::MyOtherClass() : MySuperClass() {}
 for (auto& child : children)
     child->do_child_thing();
 ```
-
 
 #### OK:
 
@@ -261,10 +263,9 @@ for (auto it = children.begin(); it != children.end(); ++it)
 
 ### Pointers and References
 
-[](#pointers-cpp) **Pointer and reference types in C++ code**
 Both pointer types and reference types should be written with no space between the type name and the `*` or `&`.
 
-[](#pointers-out-argument) An out argument of a function should be passed by reference except rare cases where it is optional in which case it should be passed by pointer.
+An out argument of a function should be passed by reference except rare cases where it is optional in which case it should be passed by pointer.
 
 ###### Right:
 
@@ -293,7 +294,7 @@ void MyClass::get_some_value(OutArgumentType* outArgument) const
 
 ### "using" Statements
 
-[](#using-ak) In header files in the AK sub-library, however, it is acceptable to use "using" declarations at the end of the file to import one or more names in the AK namespace into the global scope.
+In header files in the AK sub-library, however, it is acceptable to use "using" declarations at the end of the file to import one or more names in the AK namespace into the global scope.
 
 ###### Right:
 
@@ -331,15 +332,14 @@ namespace AK {
 using AK::SomethingOrOther;
 ```
 
-[](#using-in-cpp) In C++ implementation files, do not use "using" declarations of any kind to import names in the standard template library. Directly qualify the names at the point they're used instead.
+In C++ implementation files, do not use "using" declarations of any kind to import names in the standard template library. Directly qualify the names at the point they're used instead.
 
 ###### Right:
 
 ```cpp
 // File.cpp
 
-std::swap(a, b);
-c = std::numeric_limits<int>::max()
+Core::ArgsParser args_parser;
 ```
 
 ###### Wrong:
@@ -347,8 +347,8 @@ c = std::numeric_limits<int>::max()
 ```cpp
 // File.cpp
 
-using std::swap;
-swap(a, b);
+using Core::ArgsParser;
+ArgsParser args_parser;
 ```
 
 ###### Wrong:
@@ -356,13 +356,13 @@ swap(a, b);
 ```cpp
 // File.cpp
 
-using namespace std;
-swap(a, b);
+using namespace Core;
+ArgsParser args_parser;
 ```
 
 ### Types
 
-[](#types-unsigned) Omit "int" when using "unsigned" modifier. Do not use "signed" modifier. Use "int" by itself instead.
+Omit "int" when using "unsigned" modifier. Do not use "signed" modifier. Use "int" by itself instead.
 
 ###### Right:
 
@@ -381,10 +381,10 @@ signed int c; // Doesn't omit "signed".
 
 ### Classes
 
-[](#structs-vs-classes) For types with methods, prefer `class` over `struct`.
+For types with methods, prefer `class` over `struct`.
 
-* For classes, make public getters and setters, keep members private with `m_` prefix.
-* For structs, let everything be public and skip the `m_` prefix.
+-   For classes, make public getters and setters, keep members private with `m_` prefix.
+-   For structs, let everything be public and skip the `m_` prefix.
 
 ###### Right:
 
@@ -396,12 +396,12 @@ struct Thingy {
 
 class Doohickey {
 public:
-    const String& name() const { return m_name; }
+    String const& name() const { return m_name; }
     int frob_count() const { return m_frob_count; }
 
     void jam();
 
-private;
+private:
     String m_name;
     int m_frob_count { 0 };
 }
@@ -421,7 +421,7 @@ private:
 
 class Doohickey {
 public:
-    const String& name() const { return this->name; }
+    String const& name() const { return this->name; }
 
     void jam();
 
@@ -430,7 +430,7 @@ public:
 };
 ```
 
-[](#classes-explicit) Use a constructor to do an implicit conversion when the argument is reasonably thought of as a type conversion and the type conversion is fast. Otherwise, use the explicit keyword or a function returning the type. This only applies to single argument constructors.
+Use a constructor to do an implicit conversion when the argument is reasonably thought of as a type conversion and the type conversion is fast. Otherwise, use the explicit keyword or a function returning the type. This only applies to single argument constructors.
 
 ###### Right:
 
@@ -461,7 +461,7 @@ public:
 
 ### Singleton pattern
 
-[](#singleton-static-member) Use a static member function named "the()" to access the instance of the singleton.
+Use a static member function named "the()" to access the instance of the singleton.
 
 ###### Right:
 
@@ -493,9 +493,9 @@ UniqueObject& my_unique_object(); // Free function.
 
 ### Comments
 
-[](#comments-sentences) Make comments look like sentences by starting with a capital letter and ending with a period (punctation). One exception may be end of line comments like this `if (x == y) // false for NaN`.
+Make comments look like sentences by starting with a capital letter and ending with a period (punctuation). One exception may be end of line comments like this `if (x == y) // false for NaN`.
 
-[](#comments-fixme) Use FIXME: (without attribution) to denote items that need to be addressed in the future.
+Use FIXME: (without attribution) to denote items that need to be addressed in the future.
 
 ###### Right:
 
@@ -513,9 +513,49 @@ draw_jpg(); // FIXME(joe): Make this code handle jpg in addition to the png supp
 draw_jpg(); // TODO: Make this code handle jpg in addition to the png support.
 ```
 
+Explain _why_ the code does something. The code itself should already say what is happening.
+
+###### Right:
+
+```cpp
+i++; // Go to the next page.
+```
+
+```cpp
+// Let users toggle the advice functionality by clicking on catdog.
+catdog_widget.on_click = [&] {
+    if (advice_timer->is_active())
+        advice_timer->stop();
+    else
+        advice_timer->start();
+};
+```
+
+###### Even better:
+
+```cpp
+page_index++;
+```
+
+###### Wrong:
+
+```cpp
+i++; // Increment i.
+```
+
+```cpp
+// If the user clicks, toggle the timer state.
+catdog_widget.on_click = [&] {
+    if (advice_timer->is_active())
+        advice_timer->stop();
+    else
+        advice_timer->start();
+};
+```
+
 ### Overriding Virtual Methods
 
-[](#override-methods) The declaration of a virtual method inside a class must be declared with the `virtual` keyword. All subclasses of that class must either specify the `override` keyword when overriding the virtual method or the `final` keyword when overriding the virtual method and requiring that no further subclasses can override it.
+The declaration of a virtual method inside a class must be declared with the `virtual` keyword. All subclasses of that class must also specify either the `override` keyword when overriding the virtual method, or the `final` keyword when overriding the virtual method and requiring that no further subclasses can override it.
 
 ###### Right:
 
@@ -527,7 +567,7 @@ public:
 
 class Student : public Person {
 public:
-    virtual String description() override { ... }; // This is correct because it only contains the "override" keyword to indicate that the method is overridden.
+    virtual String description() override { ... }; // This is correct because it contains both the "virtual" and "override" keywords to indicate that the method is overridden.
 }
 
 ```
@@ -540,7 +580,7 @@ public:
 
 class Student : public Person {
 public:
-    virtual String description() final { ... }; // This is correct because it only contains the "final" keyword to indicate that the method is overridden and that no subclasses of "Student" can override "description".
+    virtual String description() final { ... }; // This is correct because it contains both the "virtual" and "final" keywords to indicate that the method is overridden and that no subclasses of "Student" can override "description".
 }
 
 ```
@@ -555,7 +595,7 @@ public:
 
 class Student : public Person {
 public:
-    String description() override { ... }; // This is incorrect because it uses only the "override" keywords to indicate that the method is virtual. Instead, it should use both the "virtual" and "override" keywords.
+    String description() override { ... }; // This is incorrect because it uses only the "override" keyword to indicate that the method is virtual. Instead, it should use both the "virtual" and "override" keywords.
 }
 ```
 
@@ -567,7 +607,7 @@ public:
 
 class Student : public Person {
 public:
-    String description() final { ... }; // This is incorrect because it uses only the "final" keywords to indicate that the method is virtual and final. Instead, it should use both the "virtual" and "final" keywords.
+    String description() final { ... }; // This is incorrect because it uses only the "final" keyword to indicate that the method is virtual and final. Instead, it should use both the "virtual" and "final" keywords.
 }
 ```
 
@@ -579,7 +619,140 @@ public:
 
 class Student : public Person {
 public:
-    virtual String description() { ... }; // This is incorrect because it uses the "virtual" keyword to indicate that the method is overridden.
+    virtual String description() { ... }; // This is incorrect because it uses only the "virtual" keyword to indicate that the method is overridden.
 }
 ```
 
+### Const placement
+
+Use "east const" style where `const` is written on the right side of the type being qualified. See [this article](https://mariusbancila.ro/blog/2018/11/23/join-the-east-const-revolution/) for more information about east const.
+
+###### Right:
+
+```cpp
+Salt const& m_salt;
+```
+
+###### Wrong:
+
+```cpp
+const Salt& m_salt;
+```
+
+### Casts
+
+Before you consider a cast, please see if your problem can be solved another way that avoids the visual clutter.
+
+-   Integer constants can be specified to have (some) specific sizes with postfixes like `u, l, ul` etc. The same goes for single-precision floating-point constants with `f`.
+-   Working with smaller-size integers in arithmetic expressions is hard because of [implicit promotion](https://wiki.sei.cmu.edu/confluence/display/c/INT02-C.+Understand+integer+conversion+rules). Generally, it is fine to use `int` and other "large" types in local variables, and possibly cast at the end.
+-   If you `const_cast`, _really_ consider whether your APIs need to be adjusted in terms of their constness. Does the member function you're writing actually make sense to be `const`?
+-   If you do checked casts between base and derived types, also consider your APIs. For example: Does the function being called actually need to receive the more general type or is it fine with the more specialized type?
+
+If you _do_ need to cast: **Don't use C-style casts**. The C-style cast has [complex behavior](https://en.cppreference.com/w/c/language/cast) that is undesired in many instances. Be aware of what sort of type conversion the code is trying to achieve, and use the appropriate (!) C++ cast operator, like `static_cast`, `reinterpret_cast`, `bit_cast`, `dynamic_cast` etc.
+
+There is a single exception to this rule: marking a function parameter as used with `(void)parameter;`.
+
+###### Right:
+
+```cpp
+MyParentClass& object = get_object();
+// Verify the type...
+MyChildClass& casted = static_cast<MyChildClass&>(object);
+```
+
+```cpp
+// AK::Atomic::exchange()
+
+alignas(T) u8 buffer[sizeof(T)];
+T* ret = reinterpret_cast<T*>(buffer);
+```
+
+```cpp
+// SeekableStream::tell()
+
+// Seek with 0 and SEEK_CUR does not modify anything despite the const_cast,
+// so it's safe to do this.
+return const_cast<SeekableStream*>(this)->seek(0, SeekMode::FromCurrentPosition);
+```
+
+###### Wrong:
+
+```cpp
+// These should be static_cast.
+size_t mask_length = (size_t)((u8)-1) + 1;
+```
+
+```cpp
+// This should be reinterpret_cast.
+return (u8 const*)string.characters_without_null_termination();
+```
+
+### Omission of curly braces from statement blocks
+
+Curly braces may only be omitted from `if`/`else`/`for`/`while`/etc. statement blocks if the body is a single line.
+
+Additionally, if any body of a connected if/else statement requires curly braces according to this rule, all of them do.
+
+###### Right:
+
+```cpp
+if (condition)
+    foo();
+```
+
+```cpp
+if (condition) {
+    foo();
+    bar();
+}
+```
+
+```cpp
+if (condition) {
+    foo();
+} else if (condition) {
+    bar();
+    baz();
+} else {
+    qux();
+}
+```
+
+```cpp
+for (size_t i = i; condition; ++i) {
+    if (other_condition)
+        foo();
+}
+```
+
+##### OK:
+
+```cpp
+if (condition) {
+    foo();
+}
+```
+
+###### Wrong:
+
+```cpp
+if (condition)
+    // There is a comment here.
+    foo();
+```
+
+```cpp
+if (condition)
+    foo();
+else {
+    bar();
+    baz();
+} else
+    qux();
+```
+
+```cpp
+for (size_t i = i; condition; ++i)
+    if (other_condition)
+        foo();
+```

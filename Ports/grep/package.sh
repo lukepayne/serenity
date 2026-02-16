@@ -1,11 +1,10 @@
-#!/bin/bash ../.port_include.sh
-port=grep
-version=2.5.4
-files="https://ftp.gnu.org/gnu/grep/grep-${version}.tar.gz grep-${version}.tar.gz
-https://ftp.gnu.org/gnu/grep/grep-${version}.tar.gz.sig grep-${version}.tar.gz.sig
-https://ftp.gnu.org/gnu/gnu-keyring.gpg gnu-keyring.gpg"
-
-useconfigure=true
-configopts=--disable-perl-regexp
-auth_type="sig"
-auth_opts="--keyring ./gnu-keyring.gpg grep-${version}.tar.gz.sig"
+#!/usr/bin/env -S bash ../.port_include.sh
+port='grep'
+version='3.12'
+files=(
+    "https://ftpmirror.gnu.org/gnu/grep/grep-${version}.tar.gz#badda546dfc4b9d97e992e2c35f3b5c7f20522ffcbe2f01ba1e9cdcbe7644cdc"
+)
+useconfigure='true'
+configopts=(
+    '--disable-perl-regexp'
+)

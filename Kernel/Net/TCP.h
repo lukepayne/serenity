@@ -1,32 +1,12 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <Kernel/Net/IPv4.h>
+#include <Kernel/Net/IP/IPv4.h>
 
 namespace Kernel {
 
@@ -35,17 +15,73 @@ struct TCPFlags {
         FIN = 0x01,
         SYN = 0x02,
         RST = 0x04,
-        PUSH = 0x08,
+        PSH = 0x08,
         ACK = 0x10,
         URG = 0x20
     };
 };
 
-class [[gnu::packed]] TCPPacket
-{
+enum class TCPOptionKind : u8 {
+    End = 0,
+    Nop = 1,
+    MSS = 2,
+    WindowScale = 3,
+    SACKPermitted = 4,
+    SACK = 5,
+    Timestamp = 6,
+};
+
+class [[gnu::packed]] TCPOption {
 public:
-    TCPPacket() {}
-    ~TCPPacket() {}
+    TCPOptionKind kind() const { return m_kind; }
+    u8 length() const { return m_length; }
+
+protected:
+    TCPOption(TCPOptionKind kind, u8 length)
+        : m_kind(kind)
+        , m_length(length)
+    {
+    }
+
+private:
+    TCPOptionKind m_kind { TCPOptionKind::End };
+    u8 m_length { sizeof(TCPOption) };
+};
+
+class [[gnu::packed]] TCPOptionMSS : public TCPOption {
+public:
+    TCPOptionMSS(u16 value)
+        : TCPOption(TCPOptionKind::MSS, sizeof(TCPOptionMSS))
+        , m_value(value)
+    {
+    }
+
+    u16 value() const { return m_value; }
+
+private:
+    NetworkOrdered<u16> m_value;
+};
+
+class [[gnu::packed]] TCPOptionWindowScale : public TCPOption {
+public:
+    TCPOptionWindowScale(u8 value)
+        : TCPOption(TCPOptionKind::WindowScale, sizeof(TCPOptionWindowScale))
+        , m_value(value)
+    {
+    }
+
+    u8 value() const { return m_value; }
+
+private:
+    NetworkOrdered<u8> m_value;
+};
+
+static_assert(AssertSize<TCPOptionMSS, 4>());
+
+class [[gnu::packed]] TCPPacket {
+public:
+    TCPPacket() = default;
+    ~TCPPacket() = default;
 
     size_t header_size() const { return data_offset() * sizeof(u32); }
 
@@ -81,8 +117,30 @@ public:
     u16 urgent() const { return m_urgent; }
     void set_urgent(u16 urgent) { m_urgent = urgent; }
 
-    const void* payload() const { return ((const u8*)this) + header_size(); }
+    void const* payload() const { return ((u8 const*)this) + header_size(); }
     void* payload() { return ((u8*)this) + header_size(); }
+
+    template<typename Callback>
+    void for_each_option(Callback callback) const
+    {
+        auto const* next_option = (u8 const*)this + sizeof(TCPPacket);
+        auto const* options_end = payload();
+        while (next_option < options_end) {
+            if ((size_t)options_end - (size_t)next_option < sizeof(TCPOption))
+                return; // Not enough space left for another option
+            auto const* option = (TCPOption const*)next_option;
+            if (option->kind() == TCPOptionKind::End)
+                return;
+            if (option->kind() == TCPOptionKind::Nop) {
+                next_option += 1;
+                continue;
+            }
+            if (option->length() < sizeof(TCPOption))
+                return; // minimal option length
+            callback(*option);
+            next_option += option->length();
+        }
+    }
 
 private:
     NetworkOrdered<u16> m_source_port;
@@ -96,6 +154,6 @@ private:
     NetworkOrdered<u16> m_urgent;
 };
 
-static_assert(sizeof(TCPPacket) == 20);
+static_assert(AssertSize<TCPPacket, 20>());
 
 }

@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021-2022, Brian Gianforcaro <bgianf@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -29,36 +10,72 @@
 #include <AK/Types.h>
 
 #if defined(KERNEL)
-#    include <Kernel/StdLib.h>
+#    include <Kernel/Library/StdLib.h>
 #else
-#    include <stdlib.h>
 #    include <string.h>
 #endif
 
-#if defined(__serenity__) && !defined(KERNEL)
-extern "C" void* mmx_memcpy(void* to, const void* from, size_t);
-#endif
-
-ALWAYS_INLINE void fast_u32_copy(u32* dest, const u32* src, size_t count)
+ALWAYS_INLINE void fast_u32_copy(u32* dest, u32 const* src, size_t count)
 {
-#if defined(__serenity__) && !defined(KERNEL)
-    if (count >= 256) {
-        mmx_memcpy(dest, src, count * sizeof(count));
-        return;
-    }
-#endif
+#if ARCH(X86_64)
     asm volatile(
         "rep movsl\n"
-        : "=S"(src), "=D"(dest), "=c"(count)
-        : "S"(src), "D"(dest), "c"(count)
-        : "memory");
+        : "+S"(src), "+D"(dest), "+c"(count)::"memory");
+#else
+    __builtin_memcpy(dest, src, count * 4);
+#endif
 }
 
 ALWAYS_INLINE void fast_u32_fill(u32* dest, u32 value, size_t count)
 {
+#if ARCH(X86_64)
     asm volatile(
         "rep stosl\n"
         : "=D"(dest), "=c"(count)
         : "D"(dest), "c"(count), "a"(value)
         : "memory");
+#else
+    for (auto* p = dest; p < (dest + count); ++p) {
+        *p = value;
+    }
+#endif
 }
+
+namespace AK {
+
+inline void secure_zero(void* ptr, size_t size)
+{
+    __builtin_memset(ptr, 0, size);
+    // The memory barrier is here to avoid the compiler optimizing
+    // away the memset when we rely on it for wiping secrets.
+    asm volatile("" ::
+            : "memory");
+}
+
+// Naive implementation of a constant time buffer comparison function.
+// The goal being to not use any conditional branching so calls are
+// guarded against potential timing attacks.
+//
+// See OpenBSD's timingsafe_memcmp for more advanced implementations.
+inline bool timing_safe_compare(void const* b1, void const* b2, size_t len)
+{
+    auto* c1 = static_cast<char const*>(b1);
+    auto* c2 = static_cast<char const*>(b2);
+
+    u8 res = 0;
+    for (size_t i = 0; i < len; i++) {
+        res |= c1[i] ^ c2[i];
+    }
+
+    // FIXME: !res can potentially inject branches depending
+    // on which toolchain is being used for compilation. Ideally
+    // we would use a more advanced algorithm.
+    return !res;
+}
+
+}
+
+#if USING_AK_GLOBALLY
+using AK::secure_zero;
+using AK::timing_safe_compare;
+#endif

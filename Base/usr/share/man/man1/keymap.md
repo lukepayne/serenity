@@ -5,24 +5,37 @@ keymap - load a keyboard layout
 ## Synopsis
 
 ```**sh
-# keymap <name|file>
+$ keymap [--set-keymap keymap] [--set-keymaps keymaps]
 ```
 
 ## Description
 
-The `keymap` utility can be used to set a keyboard layout using the given name or file.
+The `keymap` utility can be used to configure the list of selected keyboard layout and switch between them.
 
-Loading by name will search for keyboard layout files in `/res/keymaps/*.json`.
+Layouts loaded from `/res/keymaps/*.json`.
+
+## Options
+
+-   `-m keymap`, `--set-keymap keymap`: The mapping to be used
+-   `-s keymaps`, `--set-keymaps keymaps`: Comma separated list of enabled mappings
 
 ## Examples
 
-Load a keyboard layout by name:
+Get name of the currently set keymap:
+
 ```sh
-# keymap en
+$ keymap
+en-us
 ```
 
-Load a keyboard layout using a file:
+Select a new list of keymaps:
+
 ```sh
-# keymap /res/keymaps/en.json
-# keymap ./map.json
+$ keymap --set-keymaps en-us,ru
+```
+
+Set a keymap:
+
+```sh
+$ keymap --set-keymap ru
 ```

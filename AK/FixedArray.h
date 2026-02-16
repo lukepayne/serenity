@@ -1,122 +1,144 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2022, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2022, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/Vector.h>
+#include <AK/Error.h>
+#include <AK/Iterator.h>
+#include <AK/Span.h>
+#include <AK/kmalloc.h>
+#include <initializer_list>
 
 namespace AK {
 
+// FixedArray is an Array with a size only known at run-time.
+// It guarantees to only allocate when being constructed, and to only deallocate when being destructed.
 template<typename T>
 class FixedArray {
 public:
-    FixedArray() {}
-    explicit FixedArray(size_t size)
-        : m_size(size)
+    FixedArray() = default;
+
+    static ErrorOr<FixedArray<T>> create(std::initializer_list<T> initializer)
     {
-        m_elements = (T*)kmalloc(sizeof(T) * m_size);
-        for (size_t i = 0; i < m_size; ++i)
-            new (&m_elements[i]) T();
-    }
-    ~FixedArray()
-    {
-        clear();
+        auto array = TRY(create(initializer.size()));
+        auto it = initializer.begin();
+        for (size_t i = 0; i < array.size(); ++i) {
+            array[i] = move(*it);
+            ++it;
+        }
+        return array;
     }
 
-    FixedArray(const FixedArray& other)
-        : m_size(other.m_size)
+    static ErrorOr<FixedArray<T>> create(size_t size)
     {
-        m_elements = (T*)kmalloc(sizeof(T) * m_size);
-        for (size_t i = 0; i < m_size; ++i)
-            new (&m_elements[i]) T(other[i]);
+        if (size == 0)
+            return FixedArray<T>();
+        auto* elements = reinterpret_cast<T*>(kmalloc(storage_allocation_size(size)));
+        if (!elements)
+            return Error::from_errno(ENOMEM);
+        for (size_t i = 0; i < size; ++i)
+            new (&elements[i]) T();
+        return FixedArray<T>(size, elements);
     }
 
-    FixedArray& operator=(const FixedArray& other)
+    static FixedArray<T> must_create_but_fixme_should_propagate_errors(size_t size)
     {
-        FixedArray array(other);
-        swap(array);
+        return MUST(create(size));
+    }
+
+    template<size_t N>
+    static ErrorOr<FixedArray<T>> create(T (&&array)[N])
+    {
+        return create(Span(array, N));
+    }
+
+    template<typename U>
+    static ErrorOr<FixedArray<T>> create(Span<U> span)
+    {
+        if (span.size() == 0)
+            return FixedArray<T>();
+        auto* elements = reinterpret_cast<T*>(kmalloc(storage_allocation_size(span.size())));
+        if (!elements)
+            return Error::from_errno(ENOMEM);
+        for (size_t i = 0; i < span.size(); ++i)
+            new (&elements[i]) T(span[i]);
+        return FixedArray<T>(span.size(), elements);
+    }
+
+    ErrorOr<FixedArray<T>> clone() const
+    {
+        return create(span());
+    }
+
+    // Nobody can ever use these functions, since it would be impossible to make them OOM-safe due to their signatures. We just explicitly delete them.
+    FixedArray(FixedArray<T> const&) = delete;
+    FixedArray<T>& operator=(FixedArray<T> const&) = delete;
+
+    FixedArray(FixedArray<T>&& other)
+        : m_size(exchange(other.m_size, 0))
+        , m_elements(exchange(other.m_elements, nullptr))
+    {
+    }
+
+    FixedArray<T>& operator=(FixedArray<T>&& other)
+    {
+        if (this != &other) {
+            this->~FixedArray();
+            new (this) FixedArray<T>(move(other));
+        }
         return *this;
     }
 
-    FixedArray(FixedArray&&) = delete;
-    FixedArray& operator=(FixedArray&&) = delete;
-
-    void clear()
+    ~FixedArray()
     {
         if (!m_elements)
             return;
         for (size_t i = 0; i < m_size; ++i)
             m_elements[i].~T();
-        kfree(m_elements);
+        kfree_sized(m_elements, storage_allocation_size(m_size));
         m_elements = nullptr;
-        m_size = 0;
     }
 
     size_t size() const { return m_size; }
+    bool is_empty() const { return size() == 0; }
+    T* data() { return m_elements; }
+    T const* data() const { return m_elements; }
 
-    T* data()
+    T& at(size_t index)
     {
-        return m_elements;
+        VERIFY(index < m_size);
+        return m_elements[index];
     }
-    const T* data() const
+
+    T& unchecked_at(size_t index)
     {
-        return m_elements;
+        return m_elements[index];
+    }
+
+    T const& at(size_t index) const
+    {
+        VERIFY(index < m_size);
+        return m_elements[index];
     }
 
     T& operator[](size_t index)
     {
-        ASSERT(index < m_size);
-        return m_elements[index];
+        return at(index);
     }
 
-    const T& operator[](size_t index) const
+    T const& operator[](size_t index) const
     {
-        ASSERT(index < m_size);
-        return m_elements[index];
+        return at(index);
     }
 
-    void resize(size_t new_size)
+    bool contains_slow(T const& value) const
     {
-        if (new_size == m_size)
-            return;
-        auto* new_elements = (T*)kmalloc(new_size * sizeof(T));
-        for (size_t i = 0; i < min(new_size, m_size); ++i)
-            new (&new_elements[i]) T(move(m_elements[i]));
-        for (size_t i = min(new_size, m_size); i < new_size; ++i)
-            new (&new_elements[i]) T();
-        for (size_t i = 0; i < m_size; ++i)
-            m_elements[i].~T();
-        if (m_elements)
-            kfree(m_elements);
-        m_elements = new_elements;
-        m_size = new_size;
-    }
-
-    bool contains(const T& value) const
-    {
+        if (!m_elements)
+            return false;
         for (size_t i = 0; i < m_size; ++i) {
             if (m_elements[i] == value)
                 return true;
@@ -124,25 +146,53 @@ public:
         return false;
     }
 
-    void swap(FixedArray& other)
+    void swap(FixedArray<T>& other)
     {
-        ::swap(m_elements, other.m_elements);
-        ::swap(m_size, other.m_size);
+        AK::swap(m_size, other.m_size);
+        AK::swap(m_elements, other.m_elements);
     }
 
-    using Iterator = VectorIterator<FixedArray, T>;
-    Iterator begin() { return Iterator(*this, 0); }
-    Iterator end() { return Iterator(*this, size()); }
+    void fill_with(T const& value)
+    {
+        if (!m_elements)
+            return;
+        for (size_t i = 0; i < m_size; ++i)
+            m_elements[i] = value;
+    }
 
-    using ConstIterator = VectorIterator<const FixedArray, const T>;
-    ConstIterator begin() const { return ConstIterator(*this, 0); }
-    ConstIterator end() const { return ConstIterator(*this, size()); }
+    using Iterator = SimpleIterator<FixedArray, T>;
+    using ConstIterator = SimpleIterator<FixedArray const, T const>;
+
+    Iterator begin() { return Iterator::begin(*this); }
+    ConstIterator begin() const { return ConstIterator::begin(*this); }
+
+    Iterator end() { return Iterator::end(*this); }
+    ConstIterator end() const { return ConstIterator::end(*this); }
+
+    Span<T> span() { return { data(), size() }; }
+    ReadonlySpan<T> span() const { return { data(), size() }; }
+
+    operator Span<T>() { return span(); }
+    operator ReadonlySpan<T>() const { return span(); }
 
 private:
+    static size_t storage_allocation_size(size_t size)
+    {
+        return size * sizeof(T);
+    }
+
+    FixedArray(size_t size, T* elements)
+        : m_size(size)
+        , m_elements(elements)
+    {
+    }
+
     size_t m_size { 0 };
     T* m_elements { nullptr };
 };
 
 }
 
+#if USING_AK_GLOBALLY
 using AK::FixedArray;
+#endif

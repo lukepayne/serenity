@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2018-2020, the SerenityOS developers.
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/select.h>
@@ -16,7 +22,6 @@ int main(int, char**)
             printf("ST: close()\n");
             close(pipefds[1]);
             pthread_exit(nullptr);
-            return nullptr;
         },
         nullptr);
 

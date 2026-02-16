@@ -17,9 +17,9 @@ int pipe2(int pipefd[2], int flags);
 Any data written to the `pipefd[1]` can then be read from `pipefd[0]`. When `pipefd[1]` is closed, reads
 from `pipefd[0]` will return EOF.
 
-`pipe2()` behaves the same as `pipe()`, but it additionally accepts the following *flags*:
+`pipe2()` behaves the same as `pipe()`, but it additionally accepts the following _flags_:
 
-* `O_CLOEXEC`: Automatically close the file descriptors created by this call, as if by `close()` call, when performing an `exec()`.
+-   `O_CLOEXEC`: Automatically close the file descriptors created by this call, as if by `close()` call, when performing an `exec()`.
 
 ## Examples
 
@@ -29,17 +29,17 @@ writes some data to the pipe which the parent reads:
 ```c++
 #include <AK/Assertions.h>
 #include <stdio.h>
-#incldue <unistd.h>
+#include <unistd.h>
 
 int main()
 {
     // Create the pipe.
     int pipefd[2];
     int rc = pipe(pipefd);
-    ASSERT(rc == 0);
+    VERIFY(rc == 0);
 
     pid_t pid = fork();
-    ASSERT(pid >= 0);
+    VERIFY(pid >= 0);
 
     if (pid == 0) {
         // Close the reading end of the pipe.
@@ -47,7 +47,7 @@ int main()
         // Write a message to the writing end of the pipe.
         static const char greeting[] = "Hello friends!";
         int nwritten = write(pipefd[1], greeting, sizeof(greeting));
-        ASSERT(nwritten == sizeof(greeting));
+        VERIFY(nwritten == sizeof(greeting));
         exit(0);
     } else {
         // Close the writing end of the pipe.
@@ -57,10 +57,10 @@ int main()
         // Read the message from the reading end of the pipe.
         char buffer[100];
         int nread = read(pipefd[0], buffer, sizeof(buffer));
-        ASSERT(nread > 0);
+        VERIFY(nread > 0);
         // Try to read again. We should get an EOF this time.
         nread = read(pipefd[0], buffer + nread, sizeof(buffer) - nread);
-        ASSERT(nread == 0);
+        VERIFY(nread == 0);
     }
 }
 ```

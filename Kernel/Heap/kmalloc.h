@@ -1,63 +1,86 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Types.h>
-
-//#define KMALLOC_DEBUG_LARGE_ALLOCATIONS
+#include <Kernel/API/POSIX/sys/limits.h> // For PAGE_SIZE. Everyone needs PAGE_SIZE
 
 #define KMALLOC_SCRUB_BYTE 0xbb
 #define KFREE_SCRUB_BYTE 0xaa
 
-void kmalloc_init();
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_impl(size_t);
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_eternal(size_t);
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_page_aligned(size_t);
-[[gnu::malloc, gnu::returns_nonnull, gnu::alloc_size(1)]] void* kmalloc_aligned(size_t, size_t alignment);
-void* krealloc(void*, size_t);
-void kfree(void*);
-void kfree_aligned(void*);
+#define MAKE_ALIGNED_ALLOCATED(type, alignment)                              \
+public:                                                                      \
+    [[nodiscard]] void* operator new(size_t)                                 \
+    {                                                                        \
+        void* ptr = kmalloc_aligned(sizeof(type), alignment);                \
+        VERIFY(ptr);                                                         \
+        return ptr;                                                          \
+    }                                                                        \
+    [[nodiscard]] void* operator new(size_t, std::nothrow_t const&) noexcept \
+    {                                                                        \
+        return kmalloc_aligned(sizeof(type), alignment);                     \
+    }                                                                        \
+    void operator delete(void* ptr) noexcept                                 \
+    {                                                                        \
+        kfree_sized(ptr, sizeof(type));                                      \
+    }                                                                        \
+                                                                             \
+private:
 
-extern size_t g_kmalloc_bytes_allocated;
-extern size_t g_kmalloc_bytes_free;
-extern size_t g_kmalloc_bytes_eternal;
-extern size_t g_kmalloc_call_count;
-extern size_t g_kfree_call_count;
+// The C++ standard specifies that the nothrow allocation tag should live in the std namespace.
+// Otherwise, `new (std::nothrow)` calls wouldn't get resolved.
+namespace std { // NOLINT(cert-dcl58-cpp) These declarations must be in ::std and we are not using <new>
+struct nothrow_t {
+    explicit nothrow_t() = default;
+};
+
+extern nothrow_t const nothrow;
+
+enum class align_val_t : size_t { };
+};
+
+void kmalloc_init();
+
+void kfree_sized(void*, size_t);
+
+struct kmalloc_stats {
+    size_t bytes_allocated;
+    size_t bytes_free;
+    size_t kmalloc_call_count;
+    size_t kfree_call_count;
+};
+void get_kmalloc_stats(kmalloc_stats&);
+
 extern bool g_dump_kmalloc_stacks;
 
 inline void* operator new(size_t, void* p) { return p; }
 inline void* operator new[](size_t, void* p) { return p; }
 
-ALWAYS_INLINE void* kmalloc(size_t size)
-{
-#ifdef KMALLOC_DEBUG_LARGE_ALLOCATIONS
-    // Any kernel allocation >= 1M is 99.9% a bug.
-    if (size >= 1048576)
-        asm volatile("cli;hlt");
-#endif
-    return kmalloc_impl(size);
-}
+[[nodiscard]] void* operator new(size_t size);
+[[nodiscard]] void* operator new(size_t size, std::nothrow_t const&) noexcept;
+[[nodiscard]] void* operator new(size_t size, std::align_val_t);
+[[nodiscard]] void* operator new(size_t size, std::align_val_t, std::nothrow_t const&) noexcept;
+
+void operator delete(void* ptr) noexcept DISALLOW("All deletes in the kernel should have a known size.");
+void operator delete(void* ptr, size_t) noexcept;
+void operator delete(void* ptr, std::align_val_t) noexcept DISALLOW("All deletes in the kernel should have a known size.");
+void operator delete(void* ptr, size_t, std::align_val_t) noexcept;
+
+[[nodiscard]] void* operator new[](size_t size);
+[[nodiscard]] void* operator new[](size_t size, std::nothrow_t const&) noexcept;
+
+void operator delete[](void* ptrs) noexcept DISALLOW("All deletes in the kernel should have a known size.");
+void operator delete[](void* ptr, size_t) noexcept;
+
+[[gnu::malloc, gnu::alloc_size(1)]] void* kmalloc(size_t);
+[[gnu::malloc, gnu::alloc_size(1, 2)]] void* kcalloc(size_t, size_t);
+
+[[gnu::malloc, gnu::alloc_size(1), gnu::alloc_align(2)]] void* kmalloc_aligned(size_t size, size_t alignment);
+
+size_t kmalloc_good_size(size_t);
+
+void kmalloc_enable_expand();

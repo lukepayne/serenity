@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Peter Elliott <pelliott@ualberta.ca>
+Date: Sat, 11 Feb 2023 15:17:27 -0700
+Subject: [PATCH] Remove call to open_memstream(3) from wl_closure_print
+
+---
+ src/connection.c | 11 +----------
+ 1 file changed, 1 insertion(+), 10 deletions(-)
+
+diff --git a/src/connection.c b/src/connection.c
+index 3ef8688d7b06e6797de852533e1db2b54107623e..9d676011cdaa2ae1aa0a32d3c4136a341563618b 100644
+--- a/src/connection.c
++++ b/src/connection.c
+@@ -1503,12 +1503,8 @@ wl_closure_print(struct wl_closure *closure, struct wl_object *target,
+ 	unsigned int time;
+ 	uint32_t nval;
+ 	FILE *f;
+-	char *buffer;
+-	size_t buffer_length;
+ 
+-	f = open_memstream(&buffer, &buffer_length);
+-	if (f == NULL)
+-		return;
++	f = stderr;
+ 
+ 	clock_gettime(CLOCK_REALTIME, &tp);
+ 	time = (tp.tv_sec * 1000000L) + (tp.tv_nsec / 1000);
+@@ -1588,11 +1584,6 @@ wl_closure_print(struct wl_closure *closure, struct wl_object *target,
+ 	}
+ 
+ 	fprintf(f, ")\n");
+-
+-	if (fclose(f) == 0) {
+-		fprintf(stderr, "%s", buffer);
+-		free(buffer);
+-	}
+ }
+ 
+ static int

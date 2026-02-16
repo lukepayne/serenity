@@ -1,95 +1,80 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2024, Dan Klishch <danilklishch@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Function.h>
 #include <AK/JsonArray.h>
 #include <AK/JsonObject.h>
 #include <AK/JsonParser.h>
 #include <AK/JsonValue.h>
-#include <AK/StringBuilder.h>
+#include <AK/StringView.h>
 
 namespace AK {
 
-JsonValue::JsonValue(Type type)
-    : m_type(type)
+namespace {
+using JsonValueStorage = Variant<
+    Empty,
+    bool,
+    i64,
+    u64,
+    double,
+    ByteString,
+    NonnullOwnPtr<JsonArray>,
+    NonnullOwnPtr<JsonObject>>;
+
+static ErrorOr<JsonValueStorage> clone(JsonValueStorage const& other)
+{
+    return other.visit(
+        [](NonnullOwnPtr<JsonArray> const& value) -> ErrorOr<JsonValueStorage> {
+            return TRY(try_make<JsonArray>(*value));
+        },
+        [](NonnullOwnPtr<JsonObject> const& value) -> ErrorOr<JsonValueStorage> {
+            return TRY(try_make<JsonObject>(*value));
+        },
+        [](auto const& value) -> ErrorOr<JsonValueStorage> { return JsonValueStorage(value); });
+}
+}
+
+JsonValue::JsonValue() = default;
+JsonValue::~JsonValue() = default;
+JsonValue::JsonValue(JsonValue&&) = default;
+JsonValue& JsonValue::operator=(JsonValue&&) = default;
+
+JsonValue::JsonValue(JsonValue const& other)
+    : m_value(MUST(clone(other.m_value)))
 {
 }
 
-JsonValue::JsonValue(const JsonValue& other)
+JsonValue& JsonValue::operator=(JsonValue const& other)
 {
-    copy_from(other);
-}
-
-JsonValue& JsonValue::operator=(const JsonValue& other)
-{
-    if (this != &other) {
-        clear();
-        copy_from(other);
-    }
+    if (this != &other)
+        m_value = MUST(clone(other.m_value));
     return *this;
 }
 
-void JsonValue::copy_from(const JsonValue& other)
+JsonValue& JsonValue::operator=(JsonArray const& other)
 {
-    m_type = other.m_type;
-    switch (m_type) {
-    case Type::String:
-        ASSERT(!m_value.as_string);
-        m_value.as_string = other.m_value.as_string;
-        m_value.as_string->ref();
-        break;
-    case Type::Object:
-        m_value.as_object = new JsonObject(*other.m_value.as_object);
-        break;
-    case Type::Array:
-        m_value.as_array = new JsonArray(*other.m_value.as_array);
-        break;
-    default:
-        m_value.as_string = other.m_value.as_string;
-        break;
-    }
+    return *this = JsonValue(other);
 }
 
-JsonValue::JsonValue(JsonValue&& other)
+JsonValue& JsonValue::operator=(JsonArray&& other)
 {
-    m_type = exchange(other.m_type, Type::Undefined);
-    m_value.as_string = exchange(other.m_value.as_string, nullptr);
+    return *this = JsonValue(other);
 }
 
-JsonValue& JsonValue::operator=(JsonValue&& other)
+JsonValue& JsonValue::operator=(JsonObject const& other)
 {
-    if (this != &other) {
-        clear();
-        m_type = exchange(other.m_type, Type::Undefined);
-        m_value.as_string = exchange(other.m_value.as_string, nullptr);
-    }
-    return *this;
+    return *this = JsonValue(other);
 }
 
-bool JsonValue::equals(const JsonValue& other) const
+JsonValue& JsonValue::operator=(JsonObject&& other)
+{
+    return *this = JsonValue(other);
+}
+
+bool JsonValue::equals(JsonValue const& other) const
 {
     if (is_null() && other.is_null())
         return true;
@@ -100,19 +85,35 @@ bool JsonValue::equals(const JsonValue& other) const
     if (is_string() && other.is_string() && as_string() == other.as_string())
         return true;
 
-#if !defined(KERNEL)
-    if (is_number() && other.is_number() && to_number<double>() == other.to_number<double>()) {
-        return true;
+    if (is_number() && other.is_number()) {
+        auto normalize = [](Variant<u64, i64, double> representation, bool& is_negative) {
+            return representation.visit(
+                [&](u64& value) -> Variant<u64, double> {
+                    is_negative = false;
+                    return value;
+                },
+                [&](i64& value) -> Variant<u64, double> {
+                    is_negative = value < 0;
+                    return static_cast<u64>(abs(value));
+                },
+                [&](double& value) -> Variant<u64, double> {
+                    is_negative = value < 0;
+                    value = abs(value);
+                    if (static_cast<double>(static_cast<u64>(value)) == value)
+                        return static_cast<u64>(value);
+                    return value;
+                });
+        };
+        bool is_this_negative;
+        auto normalized_this = normalize(as_number(), is_this_negative);
+        bool is_that_negative;
+        auto normalized_that = normalize(other.as_number(), is_that_negative);
+        return is_this_negative == is_that_negative && normalized_this == normalized_that;
     }
-#else
-    if (is_number() && other.is_number() && to_number<i64>() == other.to_number<i64>()) {
-        return true;
-    }
-#endif
 
     if (is_array() && other.is_array() && as_array().size() == other.as_array().size()) {
         bool result = true;
-        for (int i = 0; i < as_array().size(); ++i) {
+        for (size_t i = 0; i < as_array().size(); ++i) {
             result &= as_array().at(i).equals(other.as_array().at(i));
         }
         return result;
@@ -121,7 +122,11 @@ bool JsonValue::equals(const JsonValue& other) const
     if (is_object() && other.is_object() && as_object().size() == other.as_object().size()) {
         bool result = true;
         as_object().for_each_member([&](auto& key, auto& value) {
-            result &= value.equals(other.as_object().get(key));
+            auto other_value = other.as_object().get(key);
+            if (other_value.has_value())
+                result &= value.equals(*other_value);
+            else
+                result = false;
         });
         return result;
     }
@@ -130,128 +135,76 @@ bool JsonValue::equals(const JsonValue& other) const
 }
 
 JsonValue::JsonValue(int value)
-    : m_type(Type::Int32)
+    : m_value(i64 { value })
 {
-    m_value.as_i32 = value;
 }
 
 JsonValue::JsonValue(unsigned value)
-    : m_type(Type::UnsignedInt32)
+    : m_value(i64 { value })
 {
-    m_value.as_u32 = value;
 }
 
 JsonValue::JsonValue(long value)
-    : m_type(sizeof(long) == 8 ? Type::Int64 : Type::Int32)
+    : m_value(i64 { value })
 {
-    if constexpr (sizeof(long) == 8)
-        m_value.as_i64 = value;
-    else
-        m_value.as_i32 = value;
 }
 
 JsonValue::JsonValue(unsigned long value)
-    : m_type(sizeof(long) == 8 ? Type::UnsignedInt64 : Type::UnsignedInt32)
+    : m_value(u64 { value })
 {
-    if constexpr (sizeof(long) == 8)
-        m_value.as_u64 = value;
-    else
-        m_value.as_u32 = value;
 }
 
 JsonValue::JsonValue(long long value)
-    : m_type(Type::Int64)
+    : m_value(i64 { value })
 {
-    static_assert(sizeof(long long unsigned) == 8);
-    m_value.as_i64 = value;
 }
 
 JsonValue::JsonValue(long long unsigned value)
-    : m_type(Type::UnsignedInt64)
-{
-    static_assert(sizeof(long long unsigned) == 8);
-    m_value.as_u64 = value;
-}
-
-JsonValue::JsonValue(const char* cstring)
-    : JsonValue(String(cstring))
+    : m_value(u64 { value })
 {
 }
 
-#if !defined(KERNEL)
+JsonValue::JsonValue(char const* cstring)
+    : m_value(ByteString { cstring })
+{
+}
+
 JsonValue::JsonValue(double value)
-    : m_type(Type::Double)
-{
-    m_value.as_double = value;
-}
-#endif
-
-JsonValue::JsonValue(bool value)
-    : m_type(Type::Bool)
-{
-    m_value.as_bool = value;
-}
-
-JsonValue::JsonValue(const String& value)
-{
-    if (value.is_null()) {
-        m_type = Type::Null;
-    } else {
-        m_type = Type::String;
-        m_value.as_string = const_cast<StringImpl*>(value.impl());
-        m_value.as_string->ref();
-    }
-}
-
-JsonValue::JsonValue(const IPv4Address& value)
-    : JsonValue(value.to_string())
+    : m_value(double { value })
 {
 }
 
-JsonValue::JsonValue(const JsonObject& value)
-    : m_type(Type::Object)
+JsonValue::JsonValue(ByteString const& value)
+    : m_value(value)
 {
-    m_value.as_object = new JsonObject(value);
 }
 
-JsonValue::JsonValue(const JsonArray& value)
-    : m_type(Type::Array)
+JsonValue::JsonValue(StringView value)
+    : m_value(ByteString { value })
 {
-    m_value.as_array = new JsonArray(value);
+}
+
+JsonValue::JsonValue(JsonObject const& value)
+    : m_value(make<JsonObject>(value))
+{
+}
+
+JsonValue::JsonValue(JsonArray const& value)
+    : m_value(make<JsonArray>(value))
+{
 }
 
 JsonValue::JsonValue(JsonObject&& value)
-    : m_type(Type::Object)
+    : m_value(make<JsonObject>(value))
 {
-    m_value.as_object = new JsonObject(move(value));
 }
 
 JsonValue::JsonValue(JsonArray&& value)
-    : m_type(Type::Array)
+    : m_value(make<JsonArray>(value))
 {
-    m_value.as_array = new JsonArray(move(value));
 }
 
-void JsonValue::clear()
-{
-    switch (m_type) {
-    case Type::String:
-        m_value.as_string->unref();
-        break;
-    case Type::Object:
-        delete m_value.as_object;
-        break;
-    case Type::Array:
-        delete m_value.as_array;
-        break;
-    default:
-        break;
-    }
-    m_type = Type::Undefined;
-    m_value.as_string = nullptr;
-}
-
-JsonValue JsonValue::from_string(const StringView& input)
+ErrorOr<JsonValue> JsonValue::from_string(StringView input)
 {
     return JsonParser(input).parse();
 }

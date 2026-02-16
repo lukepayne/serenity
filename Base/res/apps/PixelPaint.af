@@ -1,8 +1,7 @@
 [App]
-Name=PixelPaint
+Name=&Pixel Paint
 Executable=/bin/PixelPaint
-Category=Graphics
+Category=Gra&phics
 
-[Icons]
-16x16=/res/icons/16x16/app-pixel-paint.png
-32x32=/res/icons/32x32/app-pixel-paint.png
+[Launcher]
+FileTypes=pp,bmp,dds,gif,ico,iff,jb2,jbig2,jp2,jpeg,jpf,jpg,jpx,jxl,lbm,pbm,pgm,png,ppm,qoi,tga,tiff,tif

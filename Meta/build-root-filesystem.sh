@@ -3,9 +3,8 @@
 set -e
 
 wheel_gid=1
-tty_gid=2
 phys_gid=3
-audio_gid=4
+utmp_gid=5
 window_uid=13
 window_gid=13
 
@@ -14,107 +13,151 @@ die() {
     exit 1
 }
 
-if [ "$(id -u)" != 0 ]; then
-    die "this script needs to run as root"
-fi
-
-[ -z "$SERENITY_ROOT" ] && die "SERENITY_ROOT is not set"
-[ -d "$SERENITY_ROOT/Base" ] || die "$SERENITY_ROOT/Base doesn't exist"
+[ -z "$SERENITY_SOURCE_DIR" ] && die "SERENITY_SOURCE_DIR is not set"
+[ -d "$SERENITY_SOURCE_DIR/Base" ] || die "$SERENITY_SOURCE_DIR/Base doesn't exist"
 
 umask 0022
 
 printf "installing base system... "
-cp -R "$SERENITY_ROOT"/Base/* mnt/
-cp -R Root/* mnt/
+if ! command -v rsync >/dev/null; then
+    die "Please install rsync."
+fi
+
+if rsync --chown 2>&1 | grep "missing argument" >/dev/null; then
+    rsync -aH --chown=0:0 --inplace --update "$SERENITY_SOURCE_DIR"/Base/ mnt/
+    rsync -aH --chown=0:0 --exclude="/usr/include" --inplace --update Root/ mnt/
+    rsync -aHL --chown=0:0 --inplace --update Root/usr/include/ mnt/usr/include/
+else
+    rsync -aH --inplace --update "$SERENITY_SOURCE_DIR"/Base/ mnt/
+    rsync -aH --inplace --exclude="/usr/include" --update Root/ mnt/
+    rsync -aHL --inplace --update Root/usr/include/ mnt/usr/include/
+    chown -R 0:0 mnt/
+fi
+
+SERENITY_ARCH="${SERENITY_ARCH:-x86_64}"
+
+if [ "$SERENITY_TOOLCHAIN" = "Clang" ]; then
+    TOOLCHAIN_DIR="$SERENITY_SOURCE_DIR"/Toolchain/Local/clang/
+    rsync -aH --update -t "$TOOLCHAIN_DIR"/lib/"$SERENITY_ARCH"-pc-serenity/* mnt/usr/lib
+    mkdir -p mnt/usr/include/"$SERENITY_ARCH"-pc-serenity
+    rsync -aH --update -t -r "$TOOLCHAIN_DIR"/include/c++ mnt/usr/include
+    rsync -aH --update -t -r "$TOOLCHAIN_DIR"/include/"$SERENITY_ARCH"-pc-serenity/c++ mnt/usr/include/"$SERENITY_ARCH"-pc-serenity
+else
+    rsync -aH --update -t -r "$SERENITY_SOURCE_DIR"/Toolchain/Local/"$SERENITY_ARCH"/"$SERENITY_ARCH"-pc-serenity/lib/* mnt/usr/lib
+    rsync -aH --update -t -r "$SERENITY_SOURCE_DIR"/Toolchain/Local/"$SERENITY_ARCH"/"$SERENITY_ARCH"-pc-serenity/include/c++ mnt/usr/include
+fi
+
 # If umask was 027 or similar when the repo was cloned,
 # file permissions in Base/ are too restrictive. Restore
 # the permissions needed in the image.
-chmod -R g+rX,o+rX "$SERENITY_ROOT"/Base/* mnt/
-chmod 400 mnt/res/kernel.map
+chmod -R g+rX,o+rX "$SERENITY_SOURCE_DIR"/Base/* mnt/
 
-chmod 660 mnt/etc/WindowServer/WindowServer.ini
-chown $window_uid:$window_gid mnt/etc/WindowServer/WindowServer.ini
+chmod 664 mnt/etc/WindowServer.ini
+chown $window_uid:$window_gid mnt/etc/WindowServer.ini
 echo "/bin/sh" > mnt/etc/shells
 
-chown 0:$wheel_gid mnt/bin/su
-chown 0:$wheel_gid mnt/bin/KeyboardSettings
-chown 0:$phys_gid mnt/bin/shutdown
-chown 0:$phys_gid mnt/bin/reboot
-chown 0:0 mnt/boot/Kernel
-chown 0:0 mnt/res/kernel.map
-chmod 0400 mnt/res/kernel.map
-chmod 0400 mnt/boot/Kernel
-chmod 4750 mnt/bin/su
-chmod 4755 mnt/bin/ping
-chmod 4750 mnt/bin/reboot
-chmod 4750 mnt/bin/shutdown
-chmod 4750 mnt/bin/KeyboardSettings
+if [ -f mnt/bin/su ]; then
+    chown 0:$wheel_gid mnt/bin/su
+    chmod 4750 mnt/bin/su
+fi
+if [ -f mnt/bin/passwd ]; then
+    chown 0:$wheel_gid mnt/bin/passwd
+    chmod 4755 mnt/bin/passwd
+fi
+if [ -f mnt/bin/ping ]; then
+    chown 0:$wheel_gid mnt/bin/ping
+    chmod 4755 mnt/bin/ping
+fi
+if [ -f mnt/bin/traceroute ]; then
+    chown 0:$wheel_gid mnt/bin/traceroute
+    chmod 4755 mnt/bin/traceroute
+fi
+if [ -f mnt/bin/keymap ]; then
+    chown 0:$phys_gid mnt/bin/keymap
+    chmod 4750 mnt/bin/keymap
+fi
+if [ -f mnt/bin/shutdown ]; then
+    chown 0:$phys_gid mnt/bin/shutdown
+    chmod 4750 mnt/bin/shutdown
+fi
+if [ -f mnt/bin/reboot ]; then
+    chown 0:$phys_gid mnt/bin/reboot
+    chmod 4750 mnt/bin/reboot
+fi
+if [ -f mnt/bin/pls ]; then
+    chown 0:$wheel_gid mnt/bin/pls
+    chmod 4750 mnt/bin/pls
+fi
+if [ -f mnt/bin/Escalator ]; then
+    chown 0:$wheel_gid mnt/bin/Escalator
+    chmod 4750 mnt/bin/Escalator
+fi
+if [ -f mnt/bin/utmpupdate ]; then
+    chown 0:$utmp_gid mnt/bin/utmpupdate
+    chmod 2755 mnt/bin/utmpupdate
+fi
+if [ -f mnt/bin/timezone ]; then
+    chown 0:$phys_gid mnt/bin/timezone
+    chmod 4750 mnt/bin/timezone
+fi
+if [ -f mnt/usr/Tests/Kernel/TestExt2FS ]; then
+    chown 0:0 mnt/usr/Tests/Kernel/TestExt2FS
+    chmod 4755 mnt/usr/Tests/Kernel/TestExt2FS
+fi
+if [ -f mnt/usr/Tests/Kernel/TestMemoryDeviceMmap ]; then
+    chown 0:0 mnt/usr/Tests/Kernel/TestMemoryDeviceMmap
+    chmod 4755 mnt/usr/Tests/Kernel/TestMemoryDeviceMmap
+fi
+if [ -f mnt/usr/Tests/Kernel/TestProcFSWrite ]; then
+    chown 0:0 mnt/usr/Tests/Kernel/TestProcFSWrite
+    chmod 4755 mnt/usr/Tests/Kernel/TestProcFSWrite
+fi
+if [ -f mnt/usr/Tests/Kernel/TestLoopDevice ]; then
+    chown 0:0 mnt/usr/Tests/Kernel/TestLoopDevice
+    chmod 4755 mnt/usr/Tests/Kernel/TestLoopDevice
+fi
 
+if [ -f mnt/res/kernel.map ]; then
+    chmod 0400 mnt/res/kernel.map
+fi
+
+if [ -f mnt/boot/Kernel ]; then
+    chmod 0400 mnt/boot/Kernel
+fi
+
+if [ -f mnt/boot/Kernel.debug ]; then
+    chmod 0400 mnt/boot/Kernel.debug
+fi
+
+if [ -f mnt/bin/network-settings ]; then
+    chown 0:0 mnt/bin/network-settings
+    chmod 500 mnt/bin/network-settings
+fi
+
+chmod 600 mnt/etc/shadow
+chmod 755 mnt/usr/share/HackStudio/templates/*.postcreate
 echo "done"
 
 printf "creating initial filesystem structure... "
-for dir in bin etc proc mnt tmp boot mod; do
+for dir in bin etc proc mnt tmp boot var/run usr/local usr/Ports usr/bin; do
     mkdir -p mnt/$dir
 done
 chmod 700 mnt/boot
-chmod 700 mnt/mod
 chmod 1777 mnt/tmp
 echo "done"
 
-printf "setting up device nodes... "
-mkdir -p mnt/dev
-mkdir -p mnt/dev/pts
-mknod mnt/dev/fb0 b 29 0
-chmod 660 mnt/dev/fb0
-chown 0:$phys_gid mnt/dev/fb0
-mknod mnt/dev/tty0 c 4 0
-mknod mnt/dev/tty1 c 4 1
-mknod mnt/dev/tty2 c 4 2
-mknod mnt/dev/tty3 c 4 3
-mknod mnt/dev/ttyS0 c 4 64
-mknod mnt/dev/ttyS1 c 4 65
-mknod mnt/dev/ttyS2 c 4 66
-mknod mnt/dev/ttyS3 c 4 67
-for tty in 0 1 2 3 S0 S1 S2 S3; do
-    chmod 620 mnt/dev/tty$tty
-    chown 0:$tty_gid mnt/dev/tty$tty
-done
-mknod mnt/dev/random c 1 8
-mknod mnt/dev/null c 1 3
-mknod mnt/dev/zero c 1 5
-mknod mnt/dev/full c 1 7
-# random, is failing (randomly) on fuse-ext2 on macos :)
-chmod 666 mnt/dev/random || true
-chmod 666 mnt/dev/null
-chmod 666 mnt/dev/zero
-chmod 666 mnt/dev/full
-mknod mnt/dev/keyboard c 85 1
-chmod 440 mnt/dev/keyboard
-chown 0:$phys_gid mnt/dev/keyboard
-mknod mnt/dev/mouse c 10 1
-chmod 440 mnt/dev/mouse
-chown 0:$phys_gid mnt/dev/mouse
-mknod mnt/dev/audio c 42 42
-chmod 220 mnt/dev/audio
-chown 0:$audio_gid mnt/dev/audio
-mknod mnt/dev/ptmx c 5 2
-chmod 666 mnt/dev/ptmx
-mknod mnt/dev/hda b 3 0
-mknod mnt/dev/hdb b 3 1
-mknod mnt/dev/hdc b 4 0
-mknod mnt/dev/hdd b 4 1
-for hd in a b c d; do
-    chmod 600 mnt/dev/hd$hd
-done
-
-ln -s /proc/self/fd/0 mnt/dev/stdin
-ln -s /proc/self/fd/1 mnt/dev/stdout
-ln -s /proc/self/fd/2 mnt/dev/stderr
+printf "creating utmp file... "
+echo "{}" > mnt/var/run/utmp
+chown 0:$utmp_gid mnt/var/run/utmp
+chmod 664 mnt/var/run/utmp
 echo "done"
 
-printf "writing version file... "
-GIT_HASH=$( (git log --pretty=format:'%h' -n 1 | head -c 7) || true )
-printf "[Version]\nMajor=1\nMinor=0\nGit=%s\n" "$GIT_HASH" > mnt/res/version.ini
+printf "setting up device nodes folder... "
+mkdir -p mnt/dev
+echo "done"
+
+printf "setting up sysfs folder... "
+mkdir -p mnt/sys
 echo "done"
 
 printf "installing users... "
@@ -122,49 +165,62 @@ mkdir -p mnt/root
 mkdir -p mnt/home/anon
 mkdir -p mnt/home/anon/Desktop
 mkdir -p mnt/home/anon/Downloads
+mkdir -p mnt/home/anon/Music
+mkdir -p mnt/home/anon/Pictures
 mkdir -p mnt/home/nona
-cp "$SERENITY_ROOT"/ReadMe.md mnt/home/anon/
-cp -r "$SERENITY_ROOT"/Libraries/LibJS/Tests mnt/home/anon/js-tests
+# FIXME: Handle these test copies using CMake install rules
+rm -fr mnt/home/anon/Tests/js-tests mnt/home/anon/Tests/cpp-tests
+mkdir -p mnt/home/anon/Tests/cpp-tests/
+cp "$SERENITY_SOURCE_DIR"/README.md mnt/home/anon/
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibJS/Tests mnt/home/anon/Tests/js-tests
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibCodeComprehension/Cpp/Tests mnt/home/anon/Tests/cpp-tests/comprehension
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibCpp/Tests/parser mnt/home/anon/Tests/cpp-tests/parser
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibCpp/Tests/preprocessor mnt/home/anon/Tests/cpp-tests/preprocessor
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Libraries/LibJS/Tests/test-common.js mnt/home/anon/Tests/wasm-tests
+cp -r "$SERENITY_SOURCE_DIR"/Userland/Applications/Spreadsheet/Tests mnt/home/anon/Tests/spreadsheet-tests
+
+if [ -n "$SERENITY_COPY_SOURCE" ] ; then
+  printf "\ncopying Serenity's source... "
+  rm -fr mnt/home/anon/Source/serenity
+  mkdir -p mnt/home/anon/Source/serenity
+  git clone --depth=1 file://"$SERENITY_SOURCE_DIR" mnt/home/anon/Source/serenity
+  rm -fr mnt/home/anon/Source/serenity/.git
+fi
+
 chmod 700 mnt/root
 chmod 700 mnt/home/anon
 chmod 700 mnt/home/nona
-chown -R 0:0 mnt/root
 chown -R 100:100 mnt/home/anon
-chown -R 200:200 mnt/home/nona
+chown -R 200:100 mnt/home/nona
+echo "done"
+
+printf "adding some desktop icons... "
+ln -sf /bin/Browser mnt/home/anon/Desktop/
+ln -sf /bin/TextEditor mnt/home/anon/Desktop/Text\ Editor
+ln -sf /bin/Help mnt/home/anon/Desktop/
+ln -sf /home/anon mnt/home/anon/Desktop/Home
+chown -R 100:100 mnt/home/anon/Desktop
 echo "done"
 
 printf "installing shortcuts... "
-ln -s FileManager mnt/bin/fm
-ln -s HelloWorld mnt/bin/hw
-ln -s IRCClient mnt/bin/irc
-ln -s Minesweeper mnt/bin/ms
-ln -s Shell mnt/bin/sh
-ln -s Snake mnt/bin/sn
-ln -s Taskbar mnt/bin/tb
-ln -s VisualBuilder mnt/bin/vb
-ln -s WidgetGallery mnt/bin/wg
-ln -s TextEditor mnt/bin/te
-ln -s HexEditor mnt/bin/he
-ln -s PixelPaint mnt/bin/pp
-ln -s QuickShow mnt/bin/qs
-ln -s Piano mnt/bin/pi
-ln -s SystemDialog mnt/bin/sd
-ln -s Calculator mnt/bin/calc
-ln -s Calendar mnt/bin/calendar
-ln -s Inspector mnt/bin/ins
-ln -s SoundPlayer mnt/bin/sp
-ln -s Help mnt/bin/help
-ln -s Browser mnt/bin/br
-ln -s HackStudio mnt/bin/hs
-ln -s Debugger mnt/bin/sdb
-ln -s SystemMonitor mnt/bin/sm
-ln -s ProfileViewer mnt/bin/pv
-ln -s WebServer mnt/bin/ws
-ln -s KeyboardSettings mnt/bin/keymap
-ln -s Solitaire mnt/bin/sl
+ln -sf /bin/PackageManager mnt/bin/pkg
+ln -sf /bin/RunContainer mnt/bin/runc
+ln -sf Shell mnt/bin/sh
+ln -sf test mnt/bin/[
+ln -sf less mnt/bin/more
+ln -sf /bin/env mnt/usr/bin/env
+ln -sf /bin/init mnt/init
+echo "done"
+
+printf "installing 'checksum' variants... "
+ln -sf checksum mnt/bin/b2sum
+ln -sf checksum mnt/bin/md5sum
+ln -sf checksum mnt/bin/sha1sum
+ln -sf checksum mnt/bin/sha256sum
+ln -sf checksum mnt/bin/sha512sum
 echo "done"
 
 # Run local sync script, if it exists
-if [ -f sync-local.sh ]; then
-    sh sync-local.sh
+if [ -f "${SERENITY_SOURCE_DIR}/sync-local.sh" ]; then
+    sh "${SERENITY_SOURCE_DIR}/sync-local.sh"
 fi

@@ -4,7 +4,9 @@ uname - print kernel information
 
 ## Synopsis
 
-`uname [-s] [-n] [-r] [-m] [-a]`
+```**sh
+$ uname [-s] [-n] [-r] [-m] [-a]`
+```
 
 ## Description
 
@@ -13,19 +15,20 @@ system call.
 
 ## Options
 
-* `-s`: Print the system name
-* `-n`: Print the node name (hostname)
-* `-r`: Print the system release version
-* `-m`: Print the machine type
-* `-a`: Print all of the above
+-   `-s`: Print the system name
+-   `-n`: Print the node name (hostname)
+-   `-r`: Print the system release version
+-   `-v`: Print the version of the release
+-   `-m`: Print the machine type
+-   `-a`: Print all of the above
 
 ## Examples
 
 ```sh
 $ uname -sm
-Serenity i686
+Serenity x86_64
 ```
 
 ## See also
 
-* [`uname`(2)](../man2/uname.md)
+-   [`uname`(2)](help://man/2/uname)

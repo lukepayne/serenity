@@ -1,31 +1,13 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Concepts.h>
+#include <AK/Error.h>
 #include <AK/JsonArraySerializer.h>
 #include <AK/JsonValue.h>
 #include <AK/Vector.h>
@@ -33,11 +15,17 @@
 namespace AK {
 
 class JsonArray {
-public:
-    JsonArray() {}
-    ~JsonArray() {}
+    template<typename Callback>
+    using CallbackErrorType = decltype(declval<Callback>()(declval<JsonValue const&>()))::ErrorType;
 
-    JsonArray(const JsonArray& other)
+    static_assert(SameAs<CallbackErrorType<ErrorOr<void> (*)(JsonValue const&)>, Error>);
+    static_assert(SameAs<ErrorOr<void, CallbackErrorType<ErrorOr<void> (*)(JsonValue const&)>>, ErrorOr<void>>);
+
+public:
+    JsonArray() = default;
+    ~JsonArray() = default;
+
+    JsonArray(JsonArray const& other)
         : m_values(other.m_values)
     {
     }
@@ -47,7 +35,14 @@ public:
     {
     }
 
-    JsonArray& operator=(const JsonArray& other)
+    template<IterableContainer ContainerT>
+    JsonArray(ContainerT const& source)
+    {
+        for (auto& value : source)
+            m_values.append(move(value));
+    }
+
+    JsonArray& operator=(JsonArray const& other)
     {
         if (this != &other)
             m_values = other.m_values;
@@ -61,14 +56,19 @@ public:
         return *this;
     }
 
-    int size() const { return m_values.size(); }
-    bool is_empty() const { return m_values.is_empty(); }
+    [[nodiscard]] size_t size() const { return m_values.size(); }
+    [[nodiscard]] bool is_empty() const { return m_values.is_empty(); }
 
-    const JsonValue& at(int index) const { return m_values.at(index); }
-    const JsonValue& operator[](int index) const { return at(index); }
+    [[nodiscard]] JsonValue const& at(size_t index) const { return m_values.at(index); }
+    [[nodiscard]] JsonValue const& operator[](size_t index) const { return at(index); }
+
+    [[nodiscard]] JsonValue take(size_t index) { return m_values.take(index); }
+
+    void must_append(JsonValue value) { m_values.append(move(value)); }
 
     void clear() { m_values.clear(); }
-    void append(JsonValue value) { m_values.append(move(value)); }
+    ErrorOr<void> append(JsonValue value) { return m_values.try_append(move(value)); }
+    void set(size_t index, JsonValue value) { m_values.at(index) = move(value); }
 
     template<typename Builder>
     typename Builder::OutputType serialized() const;
@@ -76,18 +76,26 @@ public:
     template<typename Builder>
     void serialize(Builder&) const;
 
-    String to_string() const { return serialized<StringBuilder>(); }
+    [[nodiscard]] ByteString to_byte_string() const { return serialized<StringBuilder>(); }
 
     template<typename Callback>
     void for_each(Callback callback) const
     {
-        for (auto& value : m_values)
+        for (auto const& value : m_values)
             callback(value);
     }
 
-    const Vector<JsonValue>& values() const { return m_values; }
+    template<FallibleFunction<JsonValue const&> Callback>
+    ErrorOr<void, CallbackErrorType<Callback>> try_for_each(Callback&& callback) const
+    {
+        for (auto const& value : m_values)
+            TRY(callback(value));
+        return {};
+    }
 
-    void ensure_capacity(int capacity) { m_values.ensure_capacity(capacity); }
+    [[nodiscard]] Vector<JsonValue> const& values() const { return m_values; }
+
+    void ensure_capacity(size_t capacity) { m_values.ensure_capacity(capacity); }
 
 private:
     Vector<JsonValue> m_values;
@@ -96,8 +104,9 @@ private:
 template<typename Builder>
 inline void JsonArray::serialize(Builder& builder) const
 {
-    JsonArraySerializer serializer { builder };
-    for_each([&](auto& value) { serializer.add(value); });
+    auto serializer = MUST(JsonArraySerializer<>::try_create(builder));
+    for_each([&](auto& value) { MUST(serializer.add(value)); });
+    MUST(serializer.finish());
 }
 
 template<typename Builder>
@@ -105,9 +114,11 @@ inline typename Builder::OutputType JsonArray::serialized() const
 {
     Builder builder;
     serialize(builder);
-    return builder.build();
+    return builder.to_byte_string();
 }
 
 }
 
+#if USING_AK_GLOBALLY
 using AK::JsonArray;
+#endif

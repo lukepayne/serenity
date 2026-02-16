@@ -1,11 +1,7 @@
 [App]
-Name=Text Editor
+Name=Text &Editor
 Executable=/bin/TextEditor
-Category=Utilities
-
-[Icons]
-16x16=/res/icons/TextEditor16.png
-32x32=/res/icons/32x32/app-texteditor.png
+Category=&Utilities
 
 [Launcher]
-FileTypes=txt,md,html,htm,js,json,ini
+FileTypes=txt,md,html,htm,js,json,ini,gmi

@@ -1,137 +1,246 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2023, Tim Flynn <trflynn89@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/DeprecatedFlyString.h>
 #include <AK/FlyString.h>
-#include <AK/HashTable.h>
+#include <AK/HashMap.h>
+#include <AK/Singleton.h>
 #include <AK/String.h>
-#include <AK/StringUtils.h>
+#include <AK/StringData.h>
 #include <AK/StringView.h>
+#include <AK/Utf8View.h>
 
 namespace AK {
 
-struct FlyStringImplTraits : public AK::Traits<StringImpl*> {
-    static unsigned hash(const StringImpl* s) { return s ? s->hash() : 0; }
-    static bool equals(const StringImpl* a, const StringImpl* b)
-    {
-        ASSERT(a);
-        ASSERT(b);
-        if (a == b)
-            return true;
-        if (a->length() != b->length())
-            return false;
-        return !__builtin_memcmp(a->characters(), b->characters(), a->length());
-    }
+struct FlyStringTableHashTraits : public Traits<Detail::StringData const*> {
+    static u32 hash(Detail::StringData const* string) { return string->hash(); }
+    static bool equals(Detail::StringData const* a, Detail::StringData const* b) { return *a == *b; }
 };
 
-static HashTable<StringImpl*, FlyStringImplTraits>& fly_impls()
+static auto& all_fly_strings()
 {
-    static HashTable<StringImpl*, FlyStringImplTraits>* table;
-    if (!table)
-        table = new HashTable<StringImpl*, FlyStringImplTraits>;
+    static Singleton<HashTable<Detail::StringData const*, FlyStringTableHashTraits>> table;
     return *table;
 }
 
-void FlyString::did_destroy_impl(Badge<StringImpl>, StringImpl& impl)
+ErrorOr<FlyString> FlyString::from_utf8(StringView string)
 {
-    fly_impls().remove(&impl);
+    if (string.is_empty())
+        return FlyString {};
+    if (string.length() <= Detail::MAX_SHORT_STRING_BYTE_COUNT)
+        return FlyString { TRY(String::from_utf8(string)) };
+    if (auto it = all_fly_strings().find(string.hash(), [&](auto& entry) { return entry->bytes_as_string_view() == string; }); it != all_fly_strings().end())
+        return FlyString { Detail::StringBase(**it) };
+    return FlyString { TRY(String::from_utf8(string)) };
 }
 
-FlyString::FlyString(const String& string)
+FlyString FlyString::from_utf8_without_validation(ReadonlyBytes string)
 {
-    if (string.is_null())
-        return;
-    if (string.impl()->is_fly()) {
-        m_impl = string.impl();
+    if (string.is_empty())
+        return FlyString {};
+    if (string.size() <= Detail::MAX_SHORT_STRING_BYTE_COUNT)
+        return FlyString { String::from_utf8_without_validation(string) };
+    if (auto it = all_fly_strings().find(StringView(string).hash(), [&](auto& entry) { return entry->bytes_as_string_view() == string; }); it != all_fly_strings().end())
+        return FlyString { Detail::StringBase(**it) };
+    return FlyString { String::from_utf8_without_validation(string) };
+}
+
+FlyString::FlyString(String const& string)
+{
+    if (string.is_short_string()) {
+        m_data = string;
         return;
     }
-    auto it = fly_impls().find(const_cast<StringImpl*>(string.impl()));
-    if (it == fly_impls().end()) {
-        fly_impls().set(const_cast<StringImpl*>(string.impl()));
-        string.impl()->set_fly({}, true);
-        m_impl = string.impl();
+
+    if (string.m_data->is_fly_string()) {
+        m_data = string;
+        return;
+    }
+
+    auto it = all_fly_strings().find(string.m_data);
+    if (it == all_fly_strings().end()) {
+        m_data = string;
+        all_fly_strings().set(string.m_data);
+        string.m_data->set_fly_string(true);
     } else {
-        ASSERT((*it)->is_fly());
-        m_impl = *it;
+        m_data.m_data = *it;
+        m_data.m_data->ref();
     }
 }
 
-FlyString::FlyString(const StringView& string)
-    : FlyString(static_cast<String>(string))
+FlyString& FlyString::operator=(String const& string)
 {
+    *this = FlyString { string };
+    return *this;
 }
 
-FlyString::FlyString(const char* string)
-    : FlyString(static_cast<String>(string))
+bool FlyString::is_empty() const
 {
+    return bytes_as_string_view().is_empty();
 }
 
-int FlyString::to_int(bool& ok) const
+unsigned FlyString::hash() const
 {
-    return StringUtils::convert_to_int(view(), ok);
+    return m_data.hash();
 }
 
-bool FlyString::equals_ignoring_case(const StringView& other) const
+u32 FlyString::ascii_case_insensitive_hash() const
 {
-    return StringUtils::equals_ignoring_case(view(), other);
+    return case_insensitive_string_hash(reinterpret_cast<char const*>(bytes().data()), bytes().size());
 }
 
-bool FlyString::ends_with(const StringView& str, CaseSensitivity case_sensitivity) const
+FlyString::operator String() const
 {
-    return StringUtils::ends_with(view(), str, case_sensitivity);
+    return to_string();
 }
 
-FlyString FlyString::to_lowercase() const
+String FlyString::to_string() const
 {
-    return String(*m_impl).to_lowercase();
+    Detail::StringBase copy = m_data;
+    return String(move(copy));
 }
 
-StringView FlyString::view() const
+Utf8View FlyString::code_points() const
 {
-    return { characters(), length() };
+    return Utf8View { bytes_as_string_view() };
 }
 
-bool FlyString::operator==(const String& string) const
+ReadonlyBytes FlyString::bytes() const
 {
-    if (m_impl == string.impl())
-        return true;
-    return String(m_impl.ptr()) == string;
+    return bytes_as_string_view().bytes();
 }
 
-bool FlyString::operator==(const StringView& string) const
+StringView FlyString::bytes_as_string_view() const
 {
-    return String(string) == String(m_impl.ptr());
+    return m_data.bytes();
 }
 
-bool FlyString::operator==(const char* string) const
+bool FlyString::operator==(String const& other) const
 {
-    if (is_null())
-        return !string;
-    if (!string)
+    return m_data == other;
+}
+
+bool FlyString::operator==(StringView string) const
+{
+    return bytes_as_string_view() == string;
+}
+
+bool FlyString::operator==(char const* string) const
+{
+    return bytes_as_string_view() == string;
+}
+
+void FlyString::did_destroy_fly_string_data(Badge<Detail::StringData>, Detail::StringData const& string_data)
+{
+    all_fly_strings().remove(&string_data);
+}
+
+Detail::StringBase FlyString::data(Badge<String>) const
+{
+    return m_data;
+}
+
+size_t FlyString::number_of_fly_strings()
+{
+    return all_fly_strings().size();
+}
+
+DeprecatedFlyString FlyString::to_deprecated_fly_string() const
+{
+    return DeprecatedFlyString(bytes_as_string_view());
+}
+
+ErrorOr<FlyString> FlyString::from_deprecated_fly_string(DeprecatedFlyString const& deprecated_fly_string)
+{
+    return FlyString::from_utf8(deprecated_fly_string.view());
+}
+
+unsigned Traits<FlyString>::hash(FlyString const& fly_string)
+{
+    return fly_string.hash();
+}
+
+int FlyString::operator<=>(FlyString const& other) const
+{
+    return bytes_as_string_view().compare(other.bytes_as_string_view());
+}
+
+ErrorOr<void> Formatter<FlyString>::format(FormatBuilder& builder, FlyString const& fly_string)
+{
+    return Formatter<StringView>::format(builder, fly_string.bytes_as_string_view());
+}
+
+FlyString FlyString::to_ascii_lowercase() const
+{
+    bool const has_ascii_uppercase = [&] {
+        for (u8 const byte : bytes()) {
+            if (AK::is_ascii_upper_alpha(byte))
+                return true;
+        }
         return false;
-    return !__builtin_strcmp(m_impl->characters(), string);
+    }();
+
+    if (!has_ascii_uppercase)
+        return *this;
+
+    Vector<u8> lowercase_bytes;
+    lowercase_bytes.ensure_capacity(bytes().size());
+    for (u8 const byte : bytes()) {
+        if (AK::is_ascii_upper_alpha(byte))
+            lowercase_bytes.unchecked_append(AK::to_ascii_lowercase(byte));
+        else
+            lowercase_bytes.unchecked_append(byte);
+    }
+    return String::from_utf8_without_validation(lowercase_bytes);
+}
+
+FlyString FlyString::to_ascii_uppercase() const
+{
+    bool const has_ascii_lowercase = [&] {
+        for (u8 const byte : bytes()) {
+            if (AK::is_ascii_lower_alpha(byte))
+                return true;
+        }
+        return false;
+    }();
+
+    if (!has_ascii_lowercase)
+        return *this;
+
+    Vector<u8> uppercase_bytes;
+    uppercase_bytes.ensure_capacity(bytes().size());
+    for (u8 const byte : bytes()) {
+        if (AK::is_ascii_lower_alpha(byte))
+            uppercase_bytes.unchecked_append(AK::to_ascii_uppercase(byte));
+        else
+            uppercase_bytes.unchecked_append(byte);
+    }
+    return String::from_utf8_without_validation(uppercase_bytes);
+}
+
+bool FlyString::equals_ignoring_ascii_case(FlyString const& other) const
+{
+    if (*this == other)
+        return true;
+    return StringUtils::equals_ignoring_ascii_case(bytes_as_string_view(), other.bytes_as_string_view());
+}
+
+bool FlyString::equals_ignoring_ascii_case(StringView other) const
+{
+    return StringUtils::equals_ignoring_ascii_case(bytes_as_string_view(), other);
+}
+
+bool FlyString::starts_with_bytes(StringView bytes, CaseSensitivity case_sensitivity) const
+{
+    return bytes_as_string_view().starts_with(bytes, case_sensitivity);
+}
+
+bool FlyString::ends_with_bytes(StringView bytes, CaseSensitivity case_sensitivity) const
+{
+    return bytes_as_string_view().ends_with(bytes, case_sensitivity);
 }
 
 }

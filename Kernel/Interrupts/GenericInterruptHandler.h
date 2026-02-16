@@ -1,35 +1,14 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
-#include <AK/HashTable.h>
-#include <AK/String.h>
+#include <AK/IntrusiveList.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/i386/CPU.h>
+#include <Kernel/Arch/RegisterState.h>
 
 namespace Kernel {
 
@@ -43,33 +22,52 @@ enum class HandlerType : u8 {
 class GenericInterruptHandler {
 public:
     static GenericInterruptHandler& from(u8 interrupt_number);
-    virtual ~GenericInterruptHandler();
-    virtual void handle_interrupt(const RegisterState& regs) = 0;
+    virtual ~GenericInterruptHandler()
+    {
+        VERIFY(!m_registered);
+    }
+    // Note: this method returns boolean value, to indicate if the handler handled
+    // the interrupt or not. This is useful for shared handlers mostly.
+    virtual bool handle_interrupt() = 0;
+
+    void will_be_destroyed();
+    bool is_registered() const { return m_registered; }
+    void register_interrupt_handler();
+    void unregister_interrupt_handler();
 
     u8 interrupt_number() const { return m_interrupt_number; }
 
-    bool is_enabled() const { return m_enabled; }
-
-    size_t get_invoking_count() const { return m_invoking_count; }
+    ReadonlySpan<u32> per_cpu_call_counts() const;
 
     virtual size_t sharing_devices_count() const = 0;
     virtual bool is_shared_handler() const = 0;
-    virtual bool is_sharing_with_others() const = 0;
 
     virtual HandlerType type() const = 0;
-    virtual const char* purpose() const = 0;
-    virtual const char* controller() const = 0;
+    virtual StringView purpose() const = 0;
+    virtual StringView controller() const = 0;
 
     virtual bool eoi() = 0;
-    void increment_invoking_counter();
+    void increment_call_count();
+    void set_reserved() { m_reserved = true; }
+    bool reserved() const { return m_reserved; }
 
 protected:
     void change_interrupt_number(u8 number);
-    explicit GenericInterruptHandler(u8 interrupt_number);
+    GenericInterruptHandler(u8 interrupt_number, bool disable_remap = false);
+
+    void disable_remap() { m_disable_remap = true; }
 
 private:
-    size_t m_invoking_count { 0 };
-    bool m_enabled { false };
+    Array<u32, MAX_CPU_COUNT> m_per_cpu_call_counts {};
+
     u8 m_interrupt_number { 0 };
+    bool m_disable_remap { false };
+    bool m_registered { false };
+    bool m_reserved { false };
+
+    IntrusiveListNode<GenericInterruptHandler> m_list_node;
+
+public:
+    using List = IntrusiveList<&GenericInterruptHandler::m_list_node>;
 };
 }

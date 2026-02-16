@@ -1,7 +1,4 @@
 [App]
-Name=Solitaire
+Name=S&olitaire
 Executable=/bin/Solitaire
-Category=Games
-
-[Icons]
-16x16=/res/icons/16x16/app-solitaire.png
+Category=&Games
